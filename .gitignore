@@ -52,3 +52,6 @@ coverage/
 *.docx
 *.doc
 *.pptx
+
+# 现有项目文件（不纳入版本控制）
+介绍文档.txt
