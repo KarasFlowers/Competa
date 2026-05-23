@@ -1,0 +1,54 @@
+# 本地参考子项目（不纳入版本控制）
+competitive-analysis-agent/
+competitorsmart/
+
+# 开发环境 / 操作系统
+.env
+.env.local
+.env.*.local
+*.log
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# IDE / 编辑器
+.vscode/
+.idea/
+*.sublime-*
+.trae/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-error.log*
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# 编译产物 / 生成文件
+dist/
+build/
+out/
+coverage/
+*.min.js
+*.min.css
+
+# 文档临时文件
+*.pdf
+*.docx
+*.doc
+*.pptx

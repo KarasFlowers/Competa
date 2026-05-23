@@ -1,0 +1,31 @@
+#!/bin/sh
+# commit-msg hook: Validate Conventional Commits format
+
+COMMIT_MSG_FILE=$1
+MSG=$(cat "$COMMIT_MSG_FILE")
+
+# Allow merge commits and revert commits
+if echo "$MSG" | grep -qE "^(Merge|Revert)"; then
+    exit 0
+fi
+
+# Conventional Commits regex
+PATTERN="^(feat|fix|docs|style|refactor|test|chore)(\([a-zA-Z0-9_-]+\))?: .+"
+
+if ! echo "$MSG" | grep -qE "$PATTERN"; then
+    echo ""
+    echo "ERROR: Commit message does not follow Conventional Commits."
+    echo ""
+    echo "Format: type(scope): subject"
+    echo ""
+    echo "Allowed types: feat, fix, docs, style, refactor, test, chore"
+    echo ""
+    echo "Examples:"
+    echo "  feat(auth): add login page"
+    echo "  fix(api): resolve timeout issue"
+    echo "  docs(readme): update setup instructions"
+    echo ""
+    exit 1
+fi
+
+exit 0
