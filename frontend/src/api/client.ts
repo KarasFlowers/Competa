@@ -54,6 +54,7 @@ export const taskApi = {
   create: (data: TaskCreatePayload) => api.post<Task>("/tasks", data),
   list: () => api.get<Task[]>("/tasks"),
   get: (id: string) => api.get<Task>(`/tasks/${id}`),
+  run: (id: string) => api.post<Task>(`/tasks/${id}/run`),
 };
 
 export const reportApi = {

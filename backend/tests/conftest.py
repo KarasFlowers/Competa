@@ -1,8 +1,13 @@
 """Shared test fixtures — in-memory DB + async client."""
 
+import os
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+# Force mock LLM in all tests (before importing app/settings)
+os.environ["LLM_MODE"] = "mock"
 
 from app.db.session import get_session
 from app.main import app
@@ -37,3 +42,9 @@ async def client():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
+
+
+@pytest.fixture
+async def session():
+    async with TestSession() as s:
+        yield s
