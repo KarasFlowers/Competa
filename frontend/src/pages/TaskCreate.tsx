@@ -25,7 +25,7 @@ export default function TaskCreate() {
         target_product: targetProduct,
         competitors: competitors.filter(Boolean),
       });
-      navigate(`/`);
+      navigate(`/tasks/${resp.data.id}`);
     } catch {
       alert("创建失败，请重试");
     } finally {

@@ -44,55 +44,7 @@ class Claim(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# AgentMessage payload subtypes
-# ---------------------------------------------------------------------------
-
-class CollectRequest(BaseModel):
-    task_id: str
-    target_products: list[str]
-    source_types: list[SourceType] = Field(default_factory=lambda: list(SourceType))
-    focus_areas: list[str] = Field(default_factory=list)
-
-
-class CollectResult(BaseModel):
-    sources: list[Source]
-    coverage_note: str = ""
-
-
-class AnalyzeRequest(BaseModel):
-    task_id: str
-    sources: list[Source]
-    analysis_dimensions: list[str] = Field(
-        default_factory=lambda: ["features", "pricing", "personas", "swot"]
-    )
-
-
-class AnalyzeResult(BaseModel):
-    feature_trees: list = Field(default_factory=list)
-    pricing_models: list = Field(default_factory=list)
-    personas: list = Field(default_factory=list)
-    swot_analyses: list = Field(default_factory=list)
-
-
-class WriteRequest(BaseModel):
-    task_id: str
-    analysis: AnalyzeResult
-    report_style: str = "professional"
-
-
-class WriteResult(BaseModel):
-    report: dict  # serialised Report — avoids circular import
-
-
-class QAFeedback(BaseModel):
-    passed: bool
-    issues: list = Field(default_factory=list)  # list[QAIssue]
-    retry_target: str = ""
-    constraints: list = Field(default_factory=list)  # list[ConstraintRule]
-
-
-# ---------------------------------------------------------------------------
-# AgentMessage — discriminated union on message_type
+# MessageType enum (needed before payload subtypes)
 # ---------------------------------------------------------------------------
 
 class MessageType(str, Enum):
@@ -105,6 +57,65 @@ class MessageType(str, Enum):
     QA_FEEDBACK = "qa_feedback"
 
 
+# ---------------------------------------------------------------------------
+# AgentMessage payload subtypes
+# ---------------------------------------------------------------------------
+
+class CollectRequest(BaseModel):
+    message_type: Literal[MessageType.COLLECT_REQUEST] = MessageType.COLLECT_REQUEST
+    task_id: str
+    target_products: list[str]
+    source_types: list[SourceType] = Field(default_factory=lambda: list(SourceType))
+    focus_areas: list[str] = Field(default_factory=list)
+
+
+class CollectResult(BaseModel):
+    message_type: Literal[MessageType.COLLECT_RESULT] = MessageType.COLLECT_RESULT
+    sources: list[Source]
+    coverage_note: str = ""
+
+
+class AnalyzeRequest(BaseModel):
+    message_type: Literal[MessageType.ANALYZE_REQUEST] = MessageType.ANALYZE_REQUEST
+    task_id: str
+    sources: list[Source]
+    analysis_dimensions: list[str] = Field(
+        default_factory=lambda: ["features", "pricing", "personas", "swot"]
+    )
+
+
+class AnalyzeResult(BaseModel):
+    message_type: Literal[MessageType.ANALYZE_RESULT] = MessageType.ANALYZE_RESULT
+    feature_trees: list["FeatureTree"] = Field(default_factory=list)
+    pricing_models: list["PricingModel"] = Field(default_factory=list)
+    personas: list["Persona"] = Field(default_factory=list)
+    swot_analyses: list["SWOT"] = Field(default_factory=list)
+
+
+class WriteRequest(BaseModel):
+    message_type: Literal[MessageType.WRITE_REQUEST] = MessageType.WRITE_REQUEST
+    task_id: str
+    analysis: AnalyzeResult
+    report_style: str = "professional"
+
+
+class WriteResult(BaseModel):
+    message_type: Literal[MessageType.WRITE_RESULT] = MessageType.WRITE_RESULT
+    report: dict  # serialised Report — avoids circular import
+
+
+class QAFeedback(BaseModel):
+    message_type: Literal[MessageType.QA_FEEDBACK] = MessageType.QA_FEEDBACK
+    passed: bool
+    issues: list["QAIssue"] = Field(default_factory=list)
+    retry_target: str = ""
+    constraints: list["ConstraintRule"] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# AgentMessage — discriminated union on message_type
+# ---------------------------------------------------------------------------
+
 MessagePayload = Annotated[
     Union[
         CollectRequest,
@@ -115,7 +126,7 @@ MessagePayload = Annotated[
         WriteResult,
         QAFeedback,
     ],
-    Field(discriminator=None),
+    Field(discriminator="message_type"),
 ]
 
 

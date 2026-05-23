@@ -46,6 +46,7 @@ out/
 coverage/
 *.min.js
 *.min.css
+*.tsbuildinfo
 
 # 文档临时文件
 *.pdf

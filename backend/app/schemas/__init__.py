@@ -6,6 +6,7 @@ from app.schemas.base import (
     CollectRequest,
     CollectResult,
     Evidence,
+    MessageType,
     QAFeedback,
     Source,
     WriteRequest,
@@ -25,11 +26,17 @@ from app.schemas.agent import AgentRegistry, AgentRole
 from app.schemas.ratchet import ConstraintRule, QAIssue, TaskMetrics
 from app.schemas.trace import AgentTrace, TraceEvent
 
+# Resolve forward references in base.py (FeatureTree, PricingModel, etc.)
+AgentMessage.model_rebuild()
+AnalyzeResult.model_rebuild()
+QAFeedback.model_rebuild()
+
 __all__ = [
     "Source",
     "Evidence",
     "Claim",
     "AgentMessage",
+    "MessageType",
     "CollectRequest",
     "CollectResult",
     "AnalyzeRequest",
