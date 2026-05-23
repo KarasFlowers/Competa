@@ -1,0 +1,1279 @@
+"""Tests for the WebDashboard server.
+
+Tests cover:
+- GET /api/state returns empty list initially, accumulates events
+- WebSocket endpoint: connect, receive broadcast event, verify JSON structure
+- Late-joiner: emit events, then connect client, verify /api/state returns all
+- Auto-shutdown: workflow_completed + disconnect → wait_for_clients_disconnect resolves
+- Broadcast error isolation: failed send doesn't crash broadcaster
+"""
+
+from __future__ import annotations
+
+import asyncio
+import time
+import traceback
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from starlette.testclient import TestClient
+
+from conductor.events import WorkflowEvent, WorkflowEventEmitter
+from conductor.web.server import WebDashboard
+
+
+def _make_dashboard(
+    *, bg: bool = False, workflow_root: Path | None = None
+) -> tuple[WorkflowEventEmitter, WebDashboard]:
+    """Create an emitter and dashboard pair for testing."""
+    emitter = WorkflowEventEmitter()
+    dashboard = WebDashboard(emitter, host="127.0.0.1", port=0, bg=bg, workflow_root=workflow_root)
+    return emitter, dashboard
+
+
+def _make_event(event_type: str, **data: object) -> WorkflowEvent:
+    """Create a WorkflowEvent for testing."""
+    return WorkflowEvent(type=event_type, timestamp=time.time(), data=dict(data))
+
+
+class TestGetApiState:
+    """Tests for GET /api/state endpoint."""
+
+    def test_empty_state_initially(self) -> None:
+        """GET /api/state returns empty list before any events."""
+        emitter, dashboard = _make_dashboard()
+        with TestClient(dashboard.app) as client:
+            resp = client.get("/api/state")
+            assert resp.status_code == 200
+            assert resp.json() == []
+
+    def test_accumulates_events(self) -> None:
+        """GET /api/state returns all emitted events in order."""
+        emitter, dashboard = _make_dashboard()
+
+        # Emit several events via the emitter
+        emitter.emit(_make_event("workflow_started", name="test-wf"))
+        emitter.emit(_make_event("agent_started", agent_name="a1"))
+        emitter.emit(_make_event("agent_completed", agent_name="a1", elapsed=1.5))
+
+        with TestClient(dashboard.app) as client:
+            resp = client.get("/api/state")
+            assert resp.status_code == 200
+            events = resp.json()
+            assert len(events) == 3
+            assert events[0]["type"] == "workflow_started"
+            assert events[0]["data"]["name"] == "test-wf"
+            assert events[1]["type"] == "agent_started"
+            assert events[2]["type"] == "agent_completed"
+            assert events[2]["data"]["elapsed"] == 1.5
+
+    def test_event_json_structure(self) -> None:
+        """Each event has type, timestamp, and data fields."""
+        emitter, dashboard = _make_dashboard()
+        emitter.emit(_make_event("agent_started", agent_name="a1"))
+
+        with TestClient(dashboard.app) as client:
+            resp = client.get("/api/state")
+            event = resp.json()[0]
+            assert "type" in event
+            assert "timestamp" in event
+            assert "data" in event
+            assert isinstance(event["timestamp"], float)
+            assert isinstance(event["data"], dict)
+
+
+class TestGetIndex:
+    """Tests for GET / endpoint."""
+
+    def test_serves_html(self) -> None:
+        """GET / returns HTML content."""
+        emitter, dashboard = _make_dashboard()
+        with TestClient(dashboard.app) as client:
+            resp = client.get("/")
+            assert resp.status_code == 200
+            assert "text/html" in resp.headers["content-type"]
+            assert "Conductor" in resp.text
+
+
+class TestWebSocket:
+    """Tests for WS /ws endpoint."""
+
+    def test_connect_and_receive_event(self) -> None:
+        """WebSocket client receives broadcast events."""
+        emitter, dashboard = _make_dashboard()
+        with TestClient(dashboard.app) as client, client.websocket_connect("/ws") as ws:
+            # Emit event while connected — _on_event runs synchronously
+            # and enqueues to the asyncio.Queue; the broadcaster task
+            # (started via lifespan) reads and sends to WebSocket.
+            emitter.emit(_make_event("agent_started", agent_name="a1"))
+
+            data = ws.receive_json()
+            assert data["type"] == "agent_started"
+            assert data["data"]["agent_name"] == "a1"
+            assert "timestamp" in data
+
+    def test_multiple_events_in_order(self) -> None:
+        """Multiple events arrive in emission order."""
+        emitter, dashboard = _make_dashboard()
+        with TestClient(dashboard.app) as client, client.websocket_connect("/ws") as ws:
+            emitter.emit(_make_event("agent_started", agent_name="a1"))
+            emitter.emit(_make_event("agent_completed", agent_name="a1"))
+
+            msg1 = ws.receive_json()
+            msg2 = ws.receive_json()
+            assert msg1["type"] == "agent_started"
+            assert msg2["type"] == "agent_completed"
+
+
+class TestLateJoiner:
+    """Tests for late-joiner support via /api/state."""
+
+    def test_late_joiner_gets_full_history(self) -> None:
+        """A client connecting after events were emitted sees all prior events."""
+        emitter, dashboard = _make_dashboard()
+
+        # Emit events before any client connects
+        emitter.emit(_make_event("workflow_started", name="test-wf"))
+        emitter.emit(_make_event("agent_started", agent_name="a1"))
+        emitter.emit(_make_event("agent_completed", agent_name="a1", elapsed=2.0))
+
+        # Late joiner fetches state
+        with TestClient(dashboard.app) as client:
+            resp = client.get("/api/state")
+            events = resp.json()
+            assert len(events) == 3
+            assert events[0]["type"] == "workflow_started"
+            assert events[1]["type"] == "agent_started"
+            assert events[2]["type"] == "agent_completed"
+
+
+class TestAutoShutdown:
+    """Tests for --web-bg auto-shutdown logic."""
+
+    def test_workflow_completed_sets_flag(self) -> None:
+        """Emitting workflow_completed sets the internal flag."""
+        emitter, dashboard = _make_dashboard(bg=True)
+        assert dashboard._workflow_completed is False
+        emitter.emit(_make_event("workflow_completed", elapsed=5.0))
+        assert dashboard._workflow_completed is True
+
+    def test_workflow_failed_sets_flag(self) -> None:
+        """Emitting workflow_failed sets the internal flag."""
+        emitter, dashboard = _make_dashboard(bg=True)
+        emitter.emit(_make_event("workflow_failed", error_type="Error", message="boom"))
+        assert dashboard._workflow_completed is True
+
+    @pytest.mark.asyncio
+    async def test_wait_for_clients_disconnect_resolves(self) -> None:
+        """wait_for_clients_disconnect resolves after grace period."""
+        emitter, dashboard = _make_dashboard(bg=True)
+
+        # Mark workflow completed
+        emitter.emit(_make_event("workflow_completed", elapsed=1.0))
+
+        # Trigger grace timer (no connections, workflow done, bg mode)
+        dashboard._maybe_start_grace_timer()
+        assert dashboard._grace_task is not None
+
+        # Override grace period to be very short for testing
+        dashboard._grace_task.cancel()
+        dashboard._grace_task = asyncio.create_task(_short_grace(dashboard._bg_event, 0.05))
+
+        # Should resolve within the short grace period
+        await asyncio.wait_for(dashboard.wait_for_clients_disconnect(), timeout=1.0)
+        assert dashboard._bg_event.is_set()
+
+    @pytest.mark.asyncio
+    async def test_grace_timer_cancelled_on_new_connection(self) -> None:
+        """New WebSocket connection cancels the grace timer."""
+        emitter, dashboard = _make_dashboard(bg=True)
+        emitter.emit(_make_event("workflow_completed", elapsed=1.0))
+
+        # Start grace timer
+        dashboard._maybe_start_grace_timer()
+        assert dashboard._grace_task is not None
+        grace_task = dashboard._grace_task
+
+        # Simulate new connection by cancelling grace (as the WS endpoint does)
+        dashboard._grace_task.cancel()
+        dashboard._grace_task = None
+
+        # Verify it was cancelled
+        with pytest.raises(asyncio.CancelledError):
+            await grace_task
+
+    def test_no_grace_timer_without_bg(self) -> None:
+        """Grace timer does not start when bg=False."""
+        emitter, dashboard = _make_dashboard(bg=False)
+        emitter.emit(_make_event("workflow_completed", elapsed=1.0))
+        dashboard._maybe_start_grace_timer()
+        assert dashboard._grace_task is None
+
+    def test_no_grace_timer_before_workflow_complete(self) -> None:
+        """Grace timer does not start before workflow completes."""
+        emitter, dashboard = _make_dashboard(bg=True)
+        dashboard._maybe_start_grace_timer()
+        assert dashboard._grace_task is None
+
+    @pytest.mark.asyncio
+    async def test_no_duplicate_grace_timer(self) -> None:
+        """Calling _maybe_start_grace_timer twice doesn't create two tasks."""
+        emitter, dashboard = _make_dashboard(bg=True)
+        emitter.emit(_make_event("workflow_completed", elapsed=1.0))
+        dashboard._maybe_start_grace_timer()
+        first = dashboard._grace_task
+        dashboard._maybe_start_grace_timer()
+        assert dashboard._grace_task is first
+        # Clean up
+        if first is not None:
+            first.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await first
+
+
+class TestBroadcastErrorIsolation:
+    """Tests that broadcast errors don't crash the broadcaster."""
+
+    def test_event_queued_despite_bad_connection(self) -> None:
+        """An event is enqueued for broadcast even when a bad WebSocket is in connections."""
+        emitter, dashboard = _make_dashboard()
+
+        # Add a mock WebSocket that will raise on send
+        bad_ws = MagicMock()
+        bad_ws.send_json = AsyncMock(side_effect=RuntimeError("connection reset"))
+        dashboard._connections.add(bad_ws)
+
+        # Emit an event — the sync callback enqueues it
+        emitter.emit(_make_event("agent_started", agent_name="a1"))
+
+        # Verify that after _on_event, the event is in the queue
+        assert not dashboard._queue.empty()
+
+    def test_good_client_unaffected_by_bad_client(self) -> None:
+        """Good WebSocket still receives events when another client fails."""
+        emitter, dashboard = _make_dashboard()
+        with TestClient(dashboard.app) as client, client.websocket_connect("/ws") as ws:
+            # Add a bad mock connection alongside the real one
+            bad_ws = MagicMock()
+            bad_ws.send_json = AsyncMock(side_effect=RuntimeError("fail"))
+            dashboard._connections.add(bad_ws)
+
+            # Emit an event
+            emitter.emit(_make_event("agent_started", agent_name="a1"))
+
+            # Good client should still receive the event
+            data = ws.receive_json()
+            assert data["type"] == "agent_started"
+
+
+class TestServerLifecycle:
+    """Tests for start/stop lifecycle."""
+
+    @pytest.mark.asyncio
+    async def test_start_and_stop(self) -> None:
+        """Server starts, binds to a port, and stops cleanly."""
+        emitter, dashboard = _make_dashboard()
+        await dashboard.start()
+        try:
+            assert dashboard._actual_port is not None
+            assert dashboard._actual_port > 0
+            assert "127.0.0.1" in dashboard.url
+            assert str(dashboard._actual_port) in dashboard.url
+        finally:
+            await dashboard.stop()
+
+    @pytest.mark.asyncio
+    async def test_url_property(self) -> None:
+        """url property returns correct format."""
+        emitter, dashboard = _make_dashboard()
+        await dashboard.start()
+        try:
+            url = dashboard.url
+            assert url.startswith("http://127.0.0.1:")
+            port_str = url.split(":")[-1]
+            assert port_str.isdigit()
+        finally:
+            await dashboard.stop()
+
+    @pytest.mark.asyncio
+    async def test_stop_unsubscribes_from_emitter(self) -> None:
+        """After stop, emitter no longer calls dashboard callback."""
+        emitter, dashboard = _make_dashboard()
+        await dashboard.start()
+        await dashboard.stop()
+
+        # Emit after stop — should not accumulate
+        initial_count = len(dashboard._event_history)
+        emitter.emit(_make_event("agent_started", agent_name="a1"))
+        assert len(dashboard._event_history) == initial_count
+
+    def test_url_before_start(self) -> None:
+        """url property returns port 0 before start()."""
+        emitter, dashboard = _make_dashboard()
+        assert dashboard.url == "http://127.0.0.1:0"
+
+    def test_app_property(self) -> None:
+        """app property returns the FastAPI instance."""
+        emitter, dashboard = _make_dashboard()
+        assert dashboard.app is not None
+        assert dashboard.app.title == "Conductor Dashboard"
+
+
+class TestEventCallback:
+    """Tests for the _on_event callback behavior."""
+
+    def test_event_serialized_to_dict(self) -> None:
+        """Events are stored as dicts, not WorkflowEvent objects."""
+        emitter, dashboard = _make_dashboard()
+        emitter.emit(_make_event("agent_started", agent_name="a1"))
+
+        assert len(dashboard._event_history) == 1
+        stored = dashboard._event_history[0]
+        assert isinstance(stored, dict)
+        assert stored["type"] == "agent_started"
+
+    def test_event_enqueued_for_broadcast(self) -> None:
+        """Each event is put into the broadcast queue."""
+        emitter, dashboard = _make_dashboard()
+        emitter.emit(_make_event("agent_started", agent_name="a1"))
+        emitter.emit(_make_event("agent_completed", agent_name="a1"))
+
+        assert dashboard._queue.qsize() == 2
+
+    def test_workflow_completed_not_set_for_other_events(self) -> None:
+        """Non-terminal events don't set _workflow_completed."""
+        emitter, dashboard = _make_dashboard()
+        emitter.emit(_make_event("agent_started", agent_name="a1"))
+        emitter.emit(_make_event("agent_completed", agent_name="a1"))
+        assert dashboard._workflow_completed is False
+
+
+class TestWaitForClientsDisconnectGuard:
+    """Tests for wait_for_clients_disconnect() guard clause."""
+
+    @pytest.mark.asyncio
+    async def test_raises_when_bg_false(self) -> None:
+        """wait_for_clients_disconnect() raises RuntimeError when bg=False."""
+        emitter, dashboard = _make_dashboard(bg=False)
+        with pytest.raises(RuntimeError, match="requires bg=True"):
+            await dashboard.wait_for_clients_disconnect()
+
+
+class TestApiStop:
+    """Tests for POST /api/stop endpoint."""
+
+    def test_stop_falls_back_to_stop_event_without_interrupt(self) -> None:
+        """POST /api/stop falls back to stop_event when no interrupt_event is set."""
+        emitter, dashboard = _make_dashboard(bg=True)
+        assert not dashboard.stop_requested
+
+        with TestClient(dashboard.app) as client:
+            resp = client.post("/api/stop")
+            assert resp.status_code == 200
+            assert resp.json() == {"status": "stopping"}
+
+        assert dashboard.stop_requested
+
+    def test_stop_sets_interrupt_event_when_available(self) -> None:
+        """POST /api/stop sets interrupt_event when one is configured."""
+        emitter, dashboard = _make_dashboard()
+        interrupt = asyncio.Event()
+        dashboard.set_interrupt_event(interrupt)
+
+        with TestClient(dashboard.app) as client:
+            resp = client.post("/api/stop")
+            assert resp.status_code == 200
+            assert resp.json() == {"status": "stopping"}
+
+        assert interrupt.is_set()
+        assert not dashboard.stop_requested  # should NOT set hard stop
+
+    def test_stop_sets_bg_event_as_fallback(self) -> None:
+        """POST /api/stop also sets the bg auto-shutdown event in fallback mode."""
+        emitter, dashboard = _make_dashboard(bg=True)
+        assert not dashboard._bg_event.is_set()
+
+        with TestClient(dashboard.app) as client:
+            client.post("/api/stop")
+
+        assert dashboard._bg_event.is_set()
+
+    @pytest.mark.asyncio
+    async def test_wait_for_stop_resolves(self) -> None:
+        """wait_for_stop() resolves when stop event is set."""
+        emitter, dashboard = _make_dashboard()
+
+        async def set_stop() -> None:
+            await asyncio.sleep(0.05)
+            dashboard._stop_event.set()
+
+        asyncio.create_task(set_stop())
+        # Should resolve quickly, not hang
+        await asyncio.wait_for(dashboard.wait_for_stop(), timeout=2.0)
+
+    @pytest.mark.asyncio
+    async def test_stop_unblocks_wait_for_clients_disconnect(self) -> None:
+        """POST /api/stop unblocks wait_for_clients_disconnect()."""
+        emitter, dashboard = _make_dashboard(bg=True)
+
+        async def trigger_stop() -> None:
+            await asyncio.sleep(0.05)
+            dashboard._stop_event.set()
+            dashboard._bg_event.set()
+
+        asyncio.create_task(trigger_stop())
+        # Should resolve because _bg_event is set
+        await asyncio.wait_for(dashboard.wait_for_clients_disconnect(), timeout=2.0)
+
+
+class TestApiResume:
+    """Tests for POST /api/resume endpoint."""
+
+    def test_resume_sets_resume_event(self) -> None:
+        """POST /api/resume sets the internal resume event."""
+        emitter, dashboard = _make_dashboard()
+        assert not dashboard.resume_event.is_set()
+
+        with TestClient(dashboard.app) as client:
+            resp = client.post("/api/resume")
+            assert resp.status_code == 200
+            assert resp.json() == {"status": "resuming"}
+
+        assert dashboard.resume_event.is_set()
+
+
+class TestApiKill:
+    """Tests for POST /api/kill endpoint."""
+
+    def test_kill_sets_stop_and_kill_events(self) -> None:
+        """POST /api/kill sets the internal stop, kill, and bg events."""
+        emitter, dashboard = _make_dashboard(bg=True)
+        assert not dashboard.stop_requested
+        assert not dashboard.kill_event.is_set()
+        assert not dashboard._bg_event.is_set()
+
+        with TestClient(dashboard.app) as client:
+            resp = client.post("/api/kill")
+            assert resp.status_code == 200
+            assert resp.json() == {"status": "killing"}
+
+        assert dashboard.stop_requested
+        assert dashboard.kill_event.is_set()
+        assert dashboard._bg_event.is_set()
+
+
+class TestServerStartupFailure:
+    """Tests for server startup failure handling."""
+
+    @pytest.mark.asyncio
+    async def test_start_raises_on_server_failure(self) -> None:
+        """start() raises RuntimeError if the server task fails before starting."""
+        from unittest.mock import patch
+
+        emitter, dashboard = _make_dashboard()
+
+        async def _fail_serve(self: object) -> None:
+            raise OSError("Address already in use")
+
+        import uvicorn
+
+        with (
+            patch.object(uvicorn.Server, "serve", _fail_serve),
+            pytest.raises(RuntimeError, match="Server failed to start"),
+        ):
+            await dashboard.start()
+
+    @pytest.mark.asyncio
+    async def test_start_raises_on_cancelled_task(self) -> None:
+        """start() raises RuntimeError if the serve task is cancelled."""
+        from unittest.mock import patch
+
+        emitter, dashboard = _make_dashboard()
+
+        async def _cancel_serve(self: object) -> None:
+            raise asyncio.CancelledError()
+
+        import uvicorn
+
+        with (
+            patch.object(uvicorn.Server, "serve", _cancel_serve),
+            pytest.raises(RuntimeError, match="Server task was cancelled"),
+        ):
+            await dashboard.start()
+
+
+def _make_exc_with_asyncio_traceback() -> AssertionError:
+    """Construct an AssertionError that carries a real (non-empty) traceback.
+
+    Combined with patching ``traceback.extract_tb`` in the relevant test, this
+    simulates the proactor accept-loop race where the AssertionError surfaces
+    from inside asyncio internals.
+    """
+    try:
+        raise AssertionError("simulated proactor race")
+    except AssertionError as e:
+        return e
+
+
+class TestProactorShutdownRace:
+    """Tests for the proactor accept-loop race guard (Python 3.14+ Windows).
+
+    The proactor event loop can raise AssertionError when a new connection
+    is accepted after Server.close() sets _sockets = None during shutdown.
+    The dashboard guards against this with both a custom exception handler
+    and a guarded serve wrapper.
+    """
+
+    def test_is_proactor_shutdown_race_true_during_shutdown(self) -> None:
+        """Returns True for AssertionError raised from asyncio internals during shutdown."""
+        _, dashboard = _make_dashboard()
+        dashboard._server = MagicMock()
+        dashboard._server.should_exit = True
+
+        exc = _make_exc_with_asyncio_traceback()
+        context = {"exception": exc}
+        # Simulate the deepest traceback frame originating in asyncio internals.
+        fake_frame = traceback.FrameSummary(
+            filename="/usr/lib/python3.14/asyncio/base_events.py",
+            lineno=1,
+            name="_attach",
+        )
+        with patch("traceback.extract_tb", return_value=[fake_frame]):
+            assert dashboard._is_proactor_shutdown_race(context) is True
+
+    def test_is_proactor_shutdown_race_false_for_non_asyncio_traceback(self) -> None:
+        """Returns False when the traceback is NOT from asyncio (issue #145 I3)."""
+        _, dashboard = _make_dashboard()
+        dashboard._server = MagicMock()
+        dashboard._server.should_exit = True
+
+        # An AssertionError raised by user/workflow code during shutdown
+        # has no asyncio frame and must NOT be silently swallowed.
+        try:
+            raise AssertionError("user-code assertion")
+        except AssertionError as e:
+            exc = e
+        context = {"exception": exc}
+        assert dashboard._is_proactor_shutdown_race(context) is False
+
+    def test_is_proactor_shutdown_race_false_without_traceback(self) -> None:
+        """Returns False when traceback is absent (issue #145 I3)."""
+        _, dashboard = _make_dashboard()
+        dashboard._server = MagicMock()
+        dashboard._server.should_exit = True
+
+        # An AssertionError without a traceback cannot be classified as the
+        # known race; the gate must fail closed.
+        context = {"exception": AssertionError()}
+        assert dashboard._is_proactor_shutdown_race(context) is False
+
+    def test_is_proactor_shutdown_race_false_when_not_shutting_down(self) -> None:
+        """_is_proactor_shutdown_race returns False when server is running."""
+        _, dashboard = _make_dashboard()
+        dashboard._server = MagicMock()
+        dashboard._server.should_exit = False
+
+        context = {"exception": AssertionError()}
+        assert dashboard._is_proactor_shutdown_race(context) is False
+
+    def test_is_proactor_shutdown_race_false_for_non_assertion(self) -> None:
+        """_is_proactor_shutdown_race returns False for non-AssertionError."""
+        _, dashboard = _make_dashboard()
+        dashboard._server = MagicMock()
+        dashboard._server.should_exit = True
+
+        context = {"exception": RuntimeError("something else")}
+        assert dashboard._is_proactor_shutdown_race(context) is False
+
+    def test_is_proactor_shutdown_race_false_without_server(self) -> None:
+        """_is_proactor_shutdown_race returns False when no server exists."""
+        _, dashboard = _make_dashboard()
+        dashboard._server = None
+
+        context = {"exception": AssertionError()}
+        assert dashboard._is_proactor_shutdown_race(context) is False
+
+    def test_loop_exception_handler_suppresses_race(self) -> None:
+        """Custom exception handler suppresses the proactor race silently."""
+        _, dashboard = _make_dashboard()
+        dashboard._server = MagicMock()
+        dashboard._server.should_exit = True
+
+        loop = MagicMock()
+        exc = _make_exc_with_asyncio_traceback()
+        context = {"exception": exc, "message": "test"}
+
+        fake_frame = traceback.FrameSummary(
+            filename="/usr/lib/python3.14/asyncio/base_events.py",
+            lineno=1,
+            name="_attach",
+        )
+        with patch("traceback.extract_tb", return_value=[fake_frame]):
+            dashboard._loop_exception_handler(loop, context)
+        loop.default_exception_handler.assert_not_called()
+
+    def test_loop_exception_handler_delegates_other_errors(self) -> None:
+        """Custom exception handler delegates non-race errors to the default."""
+        _, dashboard = _make_dashboard()
+        dashboard._server = MagicMock()
+        dashboard._server.should_exit = False
+        dashboard._original_exception_handler = None
+
+        loop = MagicMock()
+        context = {"exception": RuntimeError("real error"), "message": "boom"}
+
+        dashboard._loop_exception_handler(loop, context)
+        loop.default_exception_handler.assert_called_once_with(context)
+
+    def test_loop_exception_handler_delegates_to_original(self) -> None:
+        """Custom exception handler delegates to original handler if set."""
+        _, dashboard = _make_dashboard()
+        dashboard._server = MagicMock()
+        dashboard._server.should_exit = False
+        original = MagicMock()
+        dashboard._original_exception_handler = original
+
+        loop = MagicMock()
+        context = {"exception": ValueError("other"), "message": "test"}
+
+        dashboard._loop_exception_handler(loop, context)
+        original.assert_called_once_with(loop, context)
+        loop.default_exception_handler.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_guarded_serve_suppresses_assertion_during_shutdown(self) -> None:
+        """_guarded_serve swallows AssertionError when the asyncio-frame gate passes."""
+        import traceback as tb_mod
+        from unittest.mock import patch
+
+        _, dashboard = _make_dashboard()
+
+        async def _assert_serve(self: object) -> None:
+            raise AssertionError("self._sockets is not None")
+
+        import uvicorn
+
+        fake_frame = tb_mod.FrameSummary(
+            filename="/usr/lib/python3.14/asyncio/base_events.py",
+            lineno=1,
+            name="_attach",
+        )
+        with (
+            patch.object(uvicorn.Server, "serve", _assert_serve),
+            patch("traceback.extract_tb", return_value=[fake_frame]),
+        ):
+            dashboard._server = uvicorn.Server(
+                uvicorn.Config(app=dashboard._app, host="127.0.0.1", port=0)
+            )
+            dashboard._server.should_exit = True
+            # Should not raise — asyncio frame gate passes
+            await dashboard._guarded_serve()
+
+    @pytest.mark.asyncio
+    async def test_guarded_serve_reraises_assertion_when_running(self) -> None:
+        """_guarded_serve re-raises AssertionError when server is NOT shutting down."""
+        from unittest.mock import patch
+
+        _, dashboard = _make_dashboard()
+
+        async def _assert_serve(self: object) -> None:
+            raise AssertionError("unexpected assertion")
+
+        import uvicorn
+
+        with patch.object(uvicorn.Server, "serve", _assert_serve):
+            dashboard._server = uvicorn.Server(
+                uvicorn.Config(app=dashboard._app, host="127.0.0.1", port=0)
+            )
+            dashboard._server.should_exit = False
+            with pytest.raises(AssertionError, match="unexpected assertion"):
+                await dashboard._guarded_serve()
+
+    @pytest.mark.asyncio
+    async def test_guarded_serve_reraises_non_asyncio_assertion_during_shutdown(self) -> None:
+        """_guarded_serve re-raises AssertionError from non-asyncio code even during shutdown."""
+        import traceback as tb_mod
+        from unittest.mock import patch
+
+        _, dashboard = _make_dashboard()
+
+        async def _assert_serve(self: object) -> None:
+            raise AssertionError("workflow callback assertion")
+
+        import uvicorn
+
+        # Traceback from user code, not asyncio internals
+        fake_frame = tb_mod.FrameSummary(
+            filename="/app/src/conductor/engine/workflow.py",
+            lineno=42,
+            name="execute",
+        )
+        with (
+            patch.object(uvicorn.Server, "serve", _assert_serve),
+            patch("traceback.extract_tb", return_value=[fake_frame]),
+        ):
+            dashboard._server = uvicorn.Server(
+                uvicorn.Config(app=dashboard._app, host="127.0.0.1", port=0)
+            )
+            dashboard._server.should_exit = True
+            with pytest.raises(AssertionError, match="workflow callback assertion"):
+                await dashboard._guarded_serve()
+
+
+class TestWaitForGateResponse:
+    """Tests for WebDashboard.wait_for_gate_response stale-message handling."""
+
+    @pytest.mark.asyncio
+    async def test_returns_matching_response(self) -> None:
+        """Returns the message whose agent_name matches the awaited agent."""
+        _, dashboard = _make_dashboard()
+        await dashboard._gate_response_queue.put(
+            {"agent_name": "plan_approval", "selected_value": "approved"}
+        )
+
+        msg = await asyncio.wait_for(dashboard.wait_for_gate_response("plan_approval"), timeout=1.0)
+
+        assert msg["selected_value"] == "approved"
+
+    @pytest.mark.asyncio
+    async def test_discards_stale_non_matching_messages(self) -> None:
+        """Non-matching gate_response messages are discarded, not re-queued.
+
+        Regression test for the busy-loop bug where stale messages (e.g. a
+        duplicate click for a previously-resolved gate) were re-queued with
+        a 10ms sleep, spinning at ~100Hz forever because ``asyncio.Queue``
+        has no dedup.
+        """
+        _, dashboard = _make_dashboard()
+        # Enqueue a stale message followed by the matching one.
+        await dashboard._gate_response_queue.put(
+            {"agent_name": "old_gate", "selected_value": "approved"}
+        )
+        await dashboard._gate_response_queue.put(
+            {"agent_name": "current_gate", "selected_value": "rejected"}
+        )
+
+        msg = await asyncio.wait_for(dashboard.wait_for_gate_response("current_gate"), timeout=1.0)
+
+        assert msg["agent_name"] == "current_gate"
+        assert msg["selected_value"] == "rejected"
+        assert dashboard._gate_response_queue.empty()
+
+
+class TestWaitForIterationLimitResponse:
+    """Tests for WebDashboard.wait_for_iteration_limit_response (issue #198)."""
+
+    @pytest.mark.asyncio
+    async def test_returns_matching_response(self) -> None:
+        """Returns the response whose gate_id matches the awaited gate."""
+        _, dashboard = _make_dashboard()
+        await dashboard._iteration_limit_response_queue.put(
+            {
+                "gate_id": "gate-abc",
+                "agent_name": "researcher",
+                "additional_iterations": 5,
+            }
+        )
+
+        msg = await asyncio.wait_for(
+            dashboard.wait_for_iteration_limit_response("gate-abc"), timeout=1.0
+        )
+
+        assert msg["gate_id"] == "gate-abc"
+        assert msg["additional_iterations"] == 5
+
+    @pytest.mark.asyncio
+    async def test_discards_stale_responses_by_gate_id(self) -> None:
+        """Responses with a non-matching gate_id are dropped, not re-queued.
+
+        The same target (agent or parallel group) can trigger ``iteration_limit_reached``
+        more than once in a run. Without gate_id matching, a stale double-click
+        from the previous gate could resolve the next one with the user's
+        earlier choice. The gate_id guards against this.
+        """
+        _, dashboard = _make_dashboard()
+        await dashboard._iteration_limit_response_queue.put(
+            {
+                "gate_id": "old-gate",
+                "agent_name": "researcher",
+                "additional_iterations": 0,
+            }
+        )
+        await dashboard._iteration_limit_response_queue.put(
+            {
+                "gate_id": "current-gate",
+                "agent_name": "researcher",
+                "additional_iterations": 10,
+            }
+        )
+
+        msg = await asyncio.wait_for(
+            dashboard.wait_for_iteration_limit_response("current-gate"), timeout=1.0
+        )
+
+        assert msg["gate_id"] == "current-gate"
+        assert msg["additional_iterations"] == 10
+        # Stale message was consumed and dropped, not re-queued — otherwise
+        # a busy loop would re-examine it on every subsequent gate.
+        assert dashboard._iteration_limit_response_queue.empty()
+
+    def test_websocket_routes_iteration_limit_response_to_queue(self) -> None:
+        """``iteration_limit_response`` WS messages land in the dedicated queue.
+
+        End-to-end check: a real WebSocket client sending the message
+        type used by the dashboard reaches the queue ``_wait_for_web_iteration_limit``
+        consumes, not the gate-response or dialog queues.
+        """
+        _, dashboard = _make_dashboard()
+        with TestClient(dashboard.app) as client, client.websocket_connect("/ws") as ws:
+            ws.send_json(
+                {
+                    "type": "iteration_limit_response",
+                    "gate_id": "gate-xyz",
+                    "agent_name": "loopy_agent",
+                    "additional_iterations": 3,
+                }
+            )
+
+            # Allow the server's WS receive loop to process the message
+            # before we inspect the queue. A short poll keeps the test
+            # fast while not racing the event loop.
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                if not dashboard._iteration_limit_response_queue.empty():
+                    break
+                time.sleep(0.01)
+
+            assert not dashboard._iteration_limit_response_queue.empty()
+            assert dashboard._gate_response_queue.empty()
+            assert dashboard._dialog_response_queue.empty()
+            msg = dashboard._iteration_limit_response_queue.get_nowait()
+            assert msg["gate_id"] == "gate-xyz"
+            assert msg["additional_iterations"] == 3
+
+
+async def _short_grace(event: asyncio.Event, delay: float) -> None:
+    """Helper for testing: short grace period."""
+    await asyncio.sleep(delay)
+    event.set()
+
+
+class TestFileApi:
+    """Tests for GET /api/files/{file_path} endpoint.
+
+    Covers security checks (path traversal, extension filtering, size limits,
+    absolute path rejection) and the happy-path for reading files.
+    """
+
+    @pytest.fixture
+    def workflow_dir(self, tmp_path: Path) -> Path:
+        """Create a temporary workflow directory with sample files."""
+        (tmp_path / "plan.md").write_text("# My Plan\nSome content", encoding="utf-8")
+        (tmp_path / "data.json").write_text('{"key": "value"}', encoding="utf-8")
+        (tmp_path / "sub").mkdir()
+        (tmp_path / "sub" / "nested.yaml").write_text("key: value", encoding="utf-8")
+        (tmp_path / "secret.exe").write_bytes(b"\x00binary")
+        (tmp_path / "image.png").write_bytes(b"\x89PNG")
+        return tmp_path
+
+    def _client(self, workflow_dir: Path) -> TestClient:
+        _, dashboard = _make_dashboard(workflow_root=workflow_dir)
+        return TestClient(dashboard.app)
+
+    def test_read_markdown_file(self, workflow_dir: Path) -> None:
+        """Happy path: read a .md file."""
+        with self._client(workflow_dir) as client:
+            resp = client.get("/api/files/plan.md")
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["path"] == "plan.md"
+            assert "# My Plan" in body["content"]
+            assert body["extension"] == ".md"
+            assert body["size"] > 0
+
+    def test_read_nested_file(self, workflow_dir: Path) -> None:
+        """Read a file in a subdirectory."""
+        with self._client(workflow_dir) as client:
+            resp = client.get("/api/files/sub/nested.yaml")
+            assert resp.status_code == 200
+            assert resp.json()["path"] == "sub/nested.yaml"
+
+    def test_read_json_file(self, workflow_dir: Path) -> None:
+        """Read a JSON file."""
+        with self._client(workflow_dir) as client:
+            resp = client.get("/api/files/data.json")
+            assert resp.status_code == 200
+            assert '"key"' in resp.json()["content"]
+
+    def test_file_not_found(self, workflow_dir: Path) -> None:
+        """Non-existent file returns 404."""
+        with self._client(workflow_dir) as client:
+            resp = client.get("/api/files/nonexistent.md")
+            assert resp.status_code == 404
+
+    def test_path_traversal_dotdot(self, workflow_dir: Path) -> None:
+        """Path traversal with .. is blocked (403 containment check)."""
+        # Create a file outside workflow_dir to prove it can't be reached
+        outside = workflow_dir.parent / "secret.txt"
+        outside.write_text("top secret", encoding="utf-8")
+        with self._client(workflow_dir) as client:
+            resp = client.get("/api/files/../secret.txt")
+            assert resp.status_code in (403, 404)
+
+    def test_absolute_path_rejected(self, workflow_dir: Path) -> None:
+        """Absolute path is rejected with 403."""
+        with self._client(workflow_dir) as client:
+            resp = client.get("/api/files//etc/passwd")
+            assert resp.status_code == 403
+
+    def test_drive_path_rejected(self, workflow_dir: Path) -> None:
+        """Windows drive-qualified path is rejected."""
+        with self._client(workflow_dir) as client:
+            resp = client.get("/api/files/C:/Windows/system32/cmd.exe")
+            assert resp.status_code == 403
+
+    def test_scheme_rejected(self, workflow_dir: Path) -> None:
+        """URL scheme in path is rejected."""
+        with self._client(workflow_dir) as client:
+            resp = client.get("/api/files/file:///etc/passwd")
+            assert resp.status_code == 403
+
+    def test_disallowed_extension(self, workflow_dir: Path) -> None:
+        """Binary/disallowed extension returns 403."""
+        with self._client(workflow_dir) as client:
+            resp = client.get("/api/files/secret.exe")
+            assert resp.status_code == 403
+            assert "not supported" in resp.json()["error"]
+
+    def test_disallowed_image_extension(self, workflow_dir: Path) -> None:
+        """Image extension is not in the allowlist."""
+        with self._client(workflow_dir) as client:
+            resp = client.get("/api/files/image.png")
+            assert resp.status_code == 403
+
+    def test_large_file_rejected(self, workflow_dir: Path) -> None:
+        """File larger than 1MB is rejected with 413."""
+        big = workflow_dir / "huge.txt"
+        big.write_text("x" * (1024 * 1024 + 1), encoding="utf-8")
+        with self._client(workflow_dir) as client:
+            resp = client.get("/api/files/huge.txt")
+            assert resp.status_code == 413
+            assert "too large" in resp.json()["error"].lower()
+
+    def test_no_workflow_root_returns_404(self) -> None:
+        """When workflow_root is None, endpoint returns 404."""
+        _, dashboard = _make_dashboard(workflow_root=None)
+        with TestClient(dashboard.app) as client:
+            resp = client.get("/api/files/plan.md")
+            assert resp.status_code == 404
+            assert "No workflow root" in resp.json()["error"]
+
+    def test_unc_path_rejected(self, workflow_dir: Path) -> None:
+        """UNC path (\\\\server\\share) is rejected."""
+        with self._client(workflow_dir) as client:
+            resp = client.get("/api/files/\\\\server\\share\\file.txt")
+            assert resp.status_code in (403, 404)
+
+
+class TestReplayEventsFromJsonl:
+    """Tests for WebDashboard.replay_events_from_jsonl (issue #167)."""
+
+    def _write_jsonl(self, path: Path, events: list[dict]) -> None:
+        import json
+
+        with path.open("w", encoding="utf-8") as f:
+            for ev in events:
+                f.write(json.dumps(ev) + "\n")
+
+    def test_populates_event_history(self, tmp_path: Path) -> None:
+        """Replayed events appear in /api/state."""
+        emitter, dashboard = _make_dashboard()
+        log = tmp_path / "test.events.jsonl"
+        self._write_jsonl(
+            log,
+            [
+                {"type": "agent_started", "timestamp": 1.0, "data": {"agent_name": "a"}},
+                {"type": "agent_completed", "timestamp": 2.0, "data": {"agent_name": "a"}},
+            ],
+        )
+
+        count = dashboard.replay_events_from_jsonl(log)
+
+        assert count == 2
+        with TestClient(dashboard.app) as client:
+            resp = client.get("/api/state")
+            assert resp.status_code == 200
+            body = resp.json()
+            assert [ev["type"] for ev in body] == ["agent_started", "agent_completed"]
+
+    def test_skips_root_lifecycle_events(self, tmp_path: Path) -> None:
+        """Root workflow_started / workflow_completed / workflow_failed / checkpoint_saved
+        are filtered to avoid double-incrementing frontend wfDepth or making the
+        dashboard appear complete before resume executes.
+        """
+        emitter, dashboard = _make_dashboard()
+        log = tmp_path / "test.events.jsonl"
+        self._write_jsonl(
+            log,
+            [
+                {"type": "workflow_started", "timestamp": 1.0, "data": {"name": "wf"}},
+                {"type": "agent_started", "timestamp": 1.5, "data": {"agent_name": "a"}},
+                {"type": "agent_completed", "timestamp": 2.5, "data": {"agent_name": "a"}},
+                {"type": "checkpoint_saved", "timestamp": 2.7, "data": {"path": "/tmp/x"}},
+                {"type": "workflow_failed", "timestamp": 2.8, "data": {"error": "boom"}},
+            ],
+        )
+
+        count = dashboard.replay_events_from_jsonl(log)
+
+        assert count == 2
+        assert [ev["type"] for ev in dashboard._event_history] == [
+            "agent_started",
+            "agent_completed",
+        ]
+
+    def test_preserves_subworkflow_lifecycle_events(self, tmp_path: Path) -> None:
+        """Subworkflow-level workflow_started/completed (identified by a non-empty
+        ``data.subworkflow_path``) must be preserved so frontend wfDepth stays
+        balanced."""
+        emitter, dashboard = _make_dashboard()
+        log = tmp_path / "test.events.jsonl"
+        self._write_jsonl(
+            log,
+            [
+                {
+                    "type": "workflow_started",
+                    "timestamp": 1.0,
+                    "data": {"name": "child", "subworkflow_path": ["sub"]},
+                },
+                {
+                    "type": "workflow_completed",
+                    "timestamp": 2.0,
+                    "data": {"subworkflow_path": ["sub"]},
+                },
+            ],
+        )
+
+        count = dashboard.replay_events_from_jsonl(log)
+
+        assert count == 2
+        assert [ev["type"] for ev in dashboard._event_history] == [
+            "workflow_started",
+            "workflow_completed",
+        ]
+
+    def test_does_not_enqueue_replayed_events(self, tmp_path: Path) -> None:
+        """Replay must not enqueue on _queue — late-joiners get history via
+        /api/state and the WebSocket replay loop instead."""
+        emitter, dashboard = _make_dashboard()
+        log = tmp_path / "test.events.jsonl"
+        self._write_jsonl(
+            log,
+            [{"type": "agent_started", "timestamp": 1.0, "data": {"agent_name": "a"}}],
+        )
+
+        dashboard.replay_events_from_jsonl(log)
+
+        assert dashboard._queue.empty()
+
+    def test_missing_file_returns_zero(self, tmp_path: Path) -> None:
+        """Missing log path returns 0 and does not raise."""
+        emitter, dashboard = _make_dashboard()
+        count = dashboard.replay_events_from_jsonl(tmp_path / "nope.jsonl")
+        assert count == 0
+        assert dashboard._event_history == []
+
+    def test_corrupt_file_returns_zero(self, tmp_path: Path) -> None:
+        """A file that is not valid JSON/JSONL returns 0 and does not raise."""
+        emitter, dashboard = _make_dashboard()
+        bad = tmp_path / "bad.jsonl"
+        bad.write_text("not json at all {{{\n")
+        count = dashboard.replay_events_from_jsonl(bad)
+        assert count == 0
+        assert dashboard._event_history == []
+
+    def test_tolerates_partial_trailing_line(self, tmp_path: Path) -> None:
+        """A truncated trailing line is skipped, prior valid lines are kept."""
+        emitter, dashboard = _make_dashboard()
+        bad = tmp_path / "partial.jsonl"
+        bad.write_text(
+            '{"type":"agent_started","timestamp":1.0,"data":{"agent_name":"a"}}\n'
+            '{"type":"agent_compl'  # truncated
+        )
+        count = dashboard.replay_events_from_jsonl(bad)
+        assert count == 1
+        assert dashboard._event_history[0]["type"] == "agent_started"
+
+
+class TestReplaySyntheticFromContext:
+    """Tests for WebDashboard.replay_synthetic_from_context (issue #167 fallback)."""
+
+    def _build_config(self):
+        """Build a minimal WorkflowConfig with one agent + one script for tests."""
+        from conductor.config.schema import AgentDef, RuntimeConfig, WorkflowConfig, WorkflowDef
+
+        return WorkflowConfig(
+            workflow=WorkflowDef(
+                name="t",
+                entry_point="a",
+                runtime=RuntimeConfig(provider="copilot", model="gpt-5"),
+            ),
+            agents=[
+                AgentDef(name="a", prompt="x", routes=[]),
+                AgentDef(name="s", type="script", command="echo hi", routes=[]),
+            ],
+        )
+
+    def test_emits_started_completed_per_agent(self) -> None:
+        from conductor.engine.context import WorkflowContext
+
+        emitter, dashboard = _make_dashboard()
+        ctx = WorkflowContext()
+        ctx.store("a", {"answer": "yes"})
+
+        count = dashboard.replay_synthetic_from_context(ctx, self._build_config())
+
+        assert count == 2
+        types = [ev["type"] for ev in dashboard._event_history]
+        assert types == ["agent_started", "agent_completed"]
+        completed_data = dashboard._event_history[1]["data"]
+        assert completed_data["agent_name"] == "a"
+        assert completed_data["output"] == {"answer": "yes"}
+        assert completed_data["synthetic"] is True
+
+    def test_emits_script_events_for_script_type(self) -> None:
+        from conductor.engine.context import WorkflowContext
+
+        emitter, dashboard = _make_dashboard()
+        ctx = WorkflowContext()
+        ctx.store("s", {"stdout": "hi", "stderr": "", "exit_code": 0})
+
+        count = dashboard.replay_synthetic_from_context(ctx, self._build_config())
+
+        assert count == 2
+        types = [ev["type"] for ev in dashboard._event_history]
+        assert types == ["script_started", "script_completed"]
+        assert dashboard._event_history[1]["data"]["stdout"] == "hi"
+
+    def test_empty_history_returns_zero(self) -> None:
+        from conductor.engine.context import WorkflowContext
+
+        emitter, dashboard = _make_dashboard()
+        count = dashboard.replay_synthetic_from_context(WorkflowContext(), self._build_config())
+        assert count == 0
+        assert dashboard._event_history == []
+
+    def test_uses_checkpoint_timestamp_when_provided(self) -> None:
+        from conductor.engine.context import WorkflowContext
+
+        emitter, dashboard = _make_dashboard()
+        ctx = WorkflowContext()
+        ctx.store("a", {"answer": "yes"})
+
+        dashboard.replay_synthetic_from_context(
+            ctx, self._build_config(), checkpoint_timestamp=42.0
+        )
+
+        for ev in dashboard._event_history:
+            assert ev["timestamp"] == 42.0
+
+    def _build_for_each_config(self):
+        """WorkflowConfig with a for-each group ``f`` over a script agent."""
+        from conductor.config.schema import (
+            ForEachDef,
+            RuntimeConfig,
+            WorkflowConfig,
+            WorkflowDef,
+        )
+
+        return WorkflowConfig(
+            workflow=WorkflowDef(
+                name="t",
+                entry_point="f",
+                runtime=RuntimeConfig(provider="copilot", model="gpt-5"),
+            ),
+            agents=[],
+            for_each=[
+                ForEachDef.model_validate(
+                    {
+                        "name": "f",
+                        "type": "for_each",
+                        "source": "workflow.input.items",
+                        "as": "item",
+                        "agent": {"name": "worker", "prompt": "{{ item }}", "routes": []},
+                    }
+                ),
+            ],
+        )
+
+    def test_for_each_uses_count_field_when_present(self) -> None:
+        """Synthetic for-each replay uses the engine's authoritative ``count``."""
+        from conductor.engine.context import WorkflowContext
+
+        emitter, dashboard = _make_dashboard()
+        ctx = WorkflowContext()
+        # Mirror what WorkflowEngine._execute_for_each_group stores:
+        # {"outputs": [...], "errors": {...}, "count": N}.
+        ctx.store("f", {"outputs": [{"a": 1}, {"a": 2}], "errors": {}, "count": 2})
+
+        count = dashboard.replay_synthetic_from_context(ctx, self._build_for_each_config())
+
+        assert count == 2
+        completed = dashboard._event_history[1]["data"]
+        assert completed["item_count"] == 2
+        assert completed["success_count"] == 2
+        assert completed["failure_count"] == 0
+
+    def test_for_each_zero_count_does_not_use_wrapper_dict_length(self) -> None:
+        """Regression test: empty ``outputs`` must not fall through to wrapper dict.
+
+        A naive ``output.get("outputs") or ...`` would treat an empty list as
+        missing and return ``len(output)`` (i.e. the number of keys in the
+        wrapper dict — 3) as the item count.
+        """
+        from conductor.engine.context import WorkflowContext
+
+        emitter, dashboard = _make_dashboard()
+        ctx = WorkflowContext()
+        ctx.store("f", {"outputs": [], "errors": {}, "count": 0})
+
+        count = dashboard.replay_synthetic_from_context(ctx, self._build_for_each_config())
+
+        assert count == 2
+        completed = dashboard._event_history[1]["data"]
+        assert completed["item_count"] == 0
+        assert completed["success_count"] == 0
+
+    def test_for_each_falls_back_to_outputs_length_when_count_missing(self) -> None:
+        """If ``count`` is absent, derive item count from ``len(outputs)``."""
+        from conductor.engine.context import WorkflowContext
+
+        emitter, dashboard = _make_dashboard()
+        ctx = WorkflowContext()
+        ctx.store("f", {"outputs": [{"a": 1}], "errors": {}})
+
+        count = dashboard.replay_synthetic_from_context(ctx, self._build_for_each_config())
+
+        assert count == 2
+        completed = dashboard._event_history[1]["data"]
+        assert completed["item_count"] == 1
+
+
+class TestPrependWorkflowStarted:
+    """Tests for WebDashboard.prepend_workflow_started (issue #167)."""
+
+    def test_inserts_at_position_zero(self, tmp_path: Path) -> None:
+        emitter, dashboard = _make_dashboard()
+        # Seed some "historical" events first.
+        dashboard._event_history.append(
+            {"type": "agent_started", "timestamp": 1.0, "data": {"agent_name": "a"}}
+        )
+
+        dashboard.prepend_workflow_started({"name": "wf", "entry_point": "a", "agents": []})
+
+        assert dashboard._event_history[0]["type"] == "workflow_started"
+        assert dashboard._event_history[1]["type"] == "agent_started"
+        assert dashboard._event_history[0]["data"]["name"] == "wf"
+        # Should be carry a timestamp.
+        assert isinstance(dashboard._event_history[0]["timestamp"], float)
