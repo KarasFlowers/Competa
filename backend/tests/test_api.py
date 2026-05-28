@@ -66,3 +66,44 @@ class TestTraces:
         resp = await client.get(f"/api/tasks/{task_id}/traces")
         assert resp.status_code == 200
         assert resp.json() == []
+
+
+class TestRunAndStatus:
+    async def test_run_nonexistent_task(self, client: AsyncClient):
+        resp = await client.post("/api/tasks/nonexistent/run")
+        assert resp.status_code == 404
+
+    async def test_run_returns_202(self, client: AsyncClient):
+        resp = await client.post("/api/tasks", json={"target_product": "TestProd"})
+        task_id = resp.json()["id"]
+
+        resp = await client.post(f"/api/tasks/{task_id}/run")
+        assert resp.status_code == 202
+        assert resp.json()["task_id"] == task_id
+
+    async def test_run_conflict_if_not_pending(self, client: AsyncClient):
+        """Tasks not in pending/failed state should reject /run."""
+        resp = await client.post("/api/tasks", json={"target_product": "TestProd2"})
+        task_id = resp.json()["id"]
+
+        # Manually set status to 'collecting' via DB to simulate running state
+        from tests.conftest import TestSession
+        from app.models.database import TaskModel
+
+        async with TestSession() as session:
+            task = await session.get(TaskModel, task_id)
+            task.status = "collecting"
+            await session.commit()
+
+        # Should reject with 409
+        resp = await client.post(f"/api/tasks/{task_id}/run")
+        assert resp.status_code == 409
+
+    async def test_status_endpoint(self, client: AsyncClient):
+        resp = await client.post("/api/tasks", json={"target_product": "StatusTest"})
+        task_id = resp.json()["id"]
+
+        resp = await client.get(f"/api/tasks/{task_id}/status")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "pending"
+        assert resp.json()["id"] == task_id
