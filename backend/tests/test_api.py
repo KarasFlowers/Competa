@@ -210,3 +210,105 @@ class TestRunAndStatus:
         assert resp.status_code == 200
         assert resp.json()["status"] == "pending"
         assert resp.json()["id"] == task_id
+
+
+class TestCORS:
+    async def test_cors_no_wildcard_with_credentials(self, client: AsyncClient):
+        """CORS should not return Access-Control-Allow-Credentials with wildcard origin."""
+        resp = await client.options(
+            "/api/health",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+        # Should not have Access-Control-Allow-Credentials: true
+        assert resp.headers.get("access-control-allow-credentials") is None
+
+
+class TestCorrections:
+    async def test_edit_claim_nested_subsection(self, client: AsyncClient):
+        """edit_claim should find claims in nested subsections."""
+        resp = await client.post("/api/tasks", json={"target_product": "NestedClaim"})
+        task_id = resp.json()["id"]
+
+        report_content = {
+            "sections": [
+                {
+                    "title": "Overview",
+                    "claims": [{"id": "c1", "content": "top claim"}],
+                    "subsections": [
+                        {
+                            "title": "Details",
+                            "claims": [{"id": "c2", "content": "nested claim"}],
+                            "subsections": [],
+                        },
+                    ],
+                },
+            ]
+        }
+
+        async with TestSession() as session:
+            session.add(ReportModel(
+                task_id=task_id,
+                title="Test Report",
+                content=report_content,
+                status="final",
+            ))
+            await session.commit()
+
+        resp = await client.post(
+            f"/api/tasks/{task_id}/corrections",
+            json={
+                "correction_type": "edit_claim",
+                "data": {"claim_id": "c2", "content": "updated nested claim"},
+            },
+        )
+        assert resp.status_code == 200
+
+        # Verify the nested claim was updated
+        async with TestSession() as session:
+            from sqlalchemy import select
+            result = await session.execute(
+                select(ReportModel).where(ReportModel.task_id == task_id)
+            )
+            report = result.scalars().first()
+            # Find the nested claim
+            for section in report.content["sections"]:
+                for sub in section.get("subsections", []):
+                    for claim in sub.get("claims", []):
+                        if claim["id"] == "c2":
+                            assert claim["content"] == "updated nested claim"
+
+    async def test_edit_claim_top_level(self, client: AsyncClient):
+        """edit_claim should still work for top-level claims."""
+        resp = await client.post("/api/tasks", json={"target_product": "TopClaim"})
+        task_id = resp.json()["id"]
+
+        report_content = {
+            "sections": [
+                {
+                    "title": "Overview",
+                    "claims": [{"id": "c1", "content": "original"}],
+                    "subsections": [],
+                },
+            ]
+        }
+
+        async with TestSession() as session:
+            session.add(ReportModel(
+                task_id=task_id,
+                title="Test Report",
+                content=report_content,
+                status="final",
+            ))
+            await session.commit()
+
+        resp = await client.post(
+            f"/api/tasks/{task_id}/corrections",
+            json={
+                "correction_type": "edit_claim",
+                "data": {"claim_id": "c1", "content": "updated"},
+            },
+        )
+        assert resp.status_code == 200
