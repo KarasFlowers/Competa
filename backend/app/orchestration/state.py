@@ -19,4 +19,4 @@ class PipelineState(TypedDict, total=False):
     status: str
     error: str
     retry_count: int
-    constraints: list[dict[str, Any]]
+    constraints: list[str]

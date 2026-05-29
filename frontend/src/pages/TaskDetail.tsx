@@ -2,6 +2,15 @@ import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { taskApi, metricsApi, type Task, type Metrics } from "../api/client";
 
+const ACTIVE_STATUSES = new Set([
+  "collecting",
+  "analyzing",
+  "writing",
+  "filtering",
+  "qa",
+  "retrying",
+]);
+
 const STATUS_COLORS: Record<string, string> = {
   pending: "bg-gray-100 text-gray-700",
   collecting: "bg-blue-100 text-blue-700",
@@ -23,7 +32,13 @@ export default function TaskDetail() {
 
   useEffect(() => {
     if (!id) return;
-    taskApi.get(id).then((r) => setTask(r.data)).catch(() => setError("Task not found"));
+    taskApi.get(id).then((r) => {
+      setTask(r.data);
+      setPolling(ACTIVE_STATUSES.has(r.data.status));
+      if (ACTIVE_STATUSES.has(r.data.status)) {
+        setMetrics(null);
+      }
+    }).catch(() => setError("Task not found"));
     metricsApi.get(id).then((r) => setMetrics(r.data)).catch(() => {});
   }, [id]);
 
@@ -46,7 +61,9 @@ export default function TaskDetail() {
   const handleRun = async () => {
     if (!id) return;
     try {
+      setError("");
       await taskApi.run(id);
+      setMetrics(null);
       setPolling(true);
       setTask((prev) => (prev ? { ...prev, status: "collecting" } : prev));
     } catch (e: any) {
@@ -76,7 +93,7 @@ export default function TaskDetail() {
 
       {/* Actions */}
       <div className="flex gap-3">
-        {["pending", "failed"].includes(task.status) && (
+        {["pending", "failed", "completed"].includes(task.status) && (
           <button
             onClick={handleRun}
             className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"

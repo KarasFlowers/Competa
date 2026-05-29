@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import logging
+import time
+
+from fastapi.encoders import jsonable_encoder
 
 from app.db.session import async_session
 from app.models.database import (
@@ -15,8 +18,40 @@ from app.models.database import (
 )
 from app.orchestration.graph import pipeline_graph
 from app.orchestration.state import PipelineState
+from app.schemas.trace import EventType, TraceEvent
 
 logger = logging.getLogger(__name__)
+
+
+def _merge_state_update(final_state: PipelineState, chunk: dict) -> None:
+    if not chunk:
+        return
+
+    payloads = []
+    if all(isinstance(value, dict) for value in chunk.values()):
+        payloads.extend(chunk.values())
+    else:
+        payloads.append(chunk)
+
+    for payload in payloads:
+        final_state.update(payload)
+
+
+def _build_trace_events(final_state: PipelineState, error_message: str | None = None) -> list[dict]:
+    trace_events = list(final_state.get("traces", []))
+    if error_message:
+        trace_events.append(
+            TraceEvent(
+                agent_name="pipeline",
+                event_type=EventType.ERROR,
+                error_message=error_message,
+            ).model_dump()
+        )
+    return trace_events
+
+
+def _serialize_trace_events(trace_events: list[dict]) -> list[dict]:
+    return jsonable_encoder(trace_events)
 
 
 async def run_pipeline(task_id: str) -> None:
@@ -26,15 +61,12 @@ async def run_pipeline(task_id: str) -> None:
     sources / report / traces / metrics / constraints.
     """
     async with async_session() as session:
+        started_at = time.monotonic()
         # Load task
         task = await session.get(TaskModel, task_id)
         if not task:
             logger.error("Task %s not found", task_id)
             return
-
-        # Update status to running
-        task.status = "collecting"
-        await session.commit()
 
         try:
             # Build initial state
@@ -58,9 +90,15 @@ async def run_pipeline(task_id: str) -> None:
                 "retry_count": 0,
                 "constraints": [],
             }
+            final_state: PipelineState = dict(initial_state)
 
-            # Run the graph
-            final_state = await pipeline_graph.ainvoke(initial_state)
+            # Run the graph and persist intermediate statuses as each node finishes.
+            async for chunk in pipeline_graph.astream(initial_state, stream_mode="updates"):
+                _merge_state_update(final_state, chunk)
+                next_status = final_state.get("status")
+                if next_status and task.status != next_status:
+                    task.status = next_status
+                    await session.commit()
 
             # Persist sources (preserve Pydantic ID so evidence_ids in claims resolve)
             for src_data in final_state.get("sources", []):
@@ -88,11 +126,18 @@ async def run_pipeline(task_id: str) -> None:
             # Persist traces
             trace_events = final_state.get("traces", [])
             if trace_events:
+                serialized_trace_events = _serialize_trace_events(trace_events)
                 trace = TraceModel(
                     task_id=task_id,
                     agent_name="pipeline",
-                    events=trace_events,
-                    status="completed",
+                    events=serialized_trace_events,
+                    total_duration=round(time.monotonic() - started_at, 3),
+                    total_tokens=sum(
+                        event.get("token_count", 0)
+                        for event in trace_events
+                        if isinstance(event, dict) and event.get("token_count")
+                    ),
+                    status="completed" if final_state.get("status") == "completed" else "failed",
                 )
                 session.add(trace)
 
@@ -131,5 +176,26 @@ async def run_pipeline(task_id: str) -> None:
 
         except Exception as e:
             logger.exception("Pipeline failed for task %s: %s", task_id, e)
+            await session.rollback()
             task.status = "failed"
+            failed_events = _build_trace_events(
+                final_state if "final_state" in locals() else {},
+                error_message=str(e),
+            )
+            if failed_events:
+                serialized_failed_events = _serialize_trace_events(failed_events)
+                session.add(
+                    TraceModel(
+                        task_id=task_id,
+                        agent_name="pipeline",
+                        events=serialized_failed_events,
+                        total_duration=round(time.monotonic() - started_at, 3),
+                        total_tokens=sum(
+                            event.get("token_count", 0)
+                            for event in failed_events
+                            if isinstance(event, dict) and event.get("token_count")
+                        ),
+                        status="failed",
+                    )
+                )
             await session.commit()
