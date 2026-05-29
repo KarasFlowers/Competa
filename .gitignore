@@ -4,6 +4,7 @@ competitorsmart/
 
 # 开发环境 / 操作系统
 .env
+!.env.example
 .env.local
 .env.*.local
 *.log
