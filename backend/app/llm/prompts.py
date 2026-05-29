@@ -4,6 +4,13 @@ Each agent has a SYSTEM prompt (role definition + output schema) and a
 `build_user_prompt` helper that fills in task-specific data.
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.services.search import SearchResult
+
 # ---------------------------------------------------------------------------
 # Collector Agent
 # ---------------------------------------------------------------------------
@@ -39,18 +46,49 @@ def build_collector_prompt(
     competitors: list[str],
     industry: str,
     focus_areas: list[str] | None = None,
+    search_results: list[SearchResult] | None = None,
 ) -> str:
     comp_list = ", ".join(competitors) if competitors else "general competitors"
     focus = ", ".join(focus_areas) if focus_areas else "features, pricing, user feedback"
-    return (
+
+    base = (
         f"Collect competitive intelligence for the following:\n"
         f"- Target product: {target_product}\n"
         f"- Competitors: {comp_list}\n"
         f"- Industry: {industry or 'general'}\n"
         f"- Focus areas: {focus}\n\n"
-        f"Generate diverse sources covering all products. "
-        f"Include at least one source per type (url, document, interview, survey)."
     )
+
+    if search_results:
+        # Format real search data for the LLM to structure
+        search_data_lines: list[str] = []
+        for i, sr in enumerate(search_results, 1):
+            line = f"[{i}] {sr.title}\n    URL: {sr.url}\n    Snippet: {sr.snippet}"
+            if sr.content:
+                # Truncate long content
+                content_preview = sr.content[:500]
+                if len(sr.content) > 500:
+                    content_preview += "..."
+                line += f"\n    Content: {content_preview}"
+            search_data_lines.append(line)
+
+        search_block = "\n".join(search_data_lines)
+        return (
+            base
+            + "The following data was retrieved from web searches. "
+            "Your job is to organize this into structured sources, filling in "
+            "the required fields. You may also generate interview and survey "
+            "type sources based on the information found, but do NOT fabricate "
+            "URLs or facts not supported by the search data.\n\n"
+            f"SEARCH RESULTS:\n{search_block}\n\n"
+            "Include at least one source per type (url, document, interview, survey)."
+        )
+    else:
+        return (
+            base
+            + "Generate diverse sources covering all products. "
+            "Include at least one source per type (url, document, interview, survey)."
+        )
 
 
 # ---------------------------------------------------------------------------

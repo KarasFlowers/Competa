@@ -24,6 +24,29 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 STARTABLE_TASK_STATUSES = ("pending", "failed", "completed")
 
+# Track background tasks to prevent GC from cancelling them
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _create_tracked_task(coro) -> asyncio.Task:
+    """Create an asyncio.Task that is tracked to prevent premature GC."""
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
+
+def _find_claim_recursive(sections: list[dict], claim_id: str) -> dict | None:
+    """Recursively search sections and subsections for a claim by ID."""
+    for section in sections:
+        for claim in section.get("claims", []):
+            if claim.get("id") == claim_id:
+                return claim
+        found = _find_claim_recursive(section.get("subsections", []), claim_id)
+        if found:
+            return found
+    return None
+
 
 # ---------------------------------------------------------------------------
 # Request / Response schemas (API-level, separate from domain schemas)
@@ -121,7 +144,7 @@ async def run_task(task_id: str, session: AsyncSession = Depends(get_session)):
         except Exception:
             logger.exception("Background pipeline failed for task %s", task_id)
 
-    asyncio.create_task(_safe_run())
+    _create_tracked_task(_safe_run())
     return {"message": "Pipeline started", "task_id": task_id}
 
 
@@ -199,11 +222,9 @@ async def submit_correction(
             content = report.content or {}
             claim_id = data.get("claim_id", "")
             new_content = data.get("content", "")
-            for section in content.get("sections", []):
-                for claim in section.get("claims", []):
-                    if claim.get("id") == claim_id:
-                        claim["content"] = new_content
-                        break
+            claim = _find_claim_recursive(content.get("sections", []), claim_id)
+            if claim:
+                claim["content"] = new_content
             report.content = content
             flag_modified(report, "content")
         # Increment manual_correction_count on metrics
@@ -258,5 +279,5 @@ async def rerun_task(task_id: str, session: AsyncSession = Depends(get_session))
         except Exception:
             logger.exception("Background rerun failed for task %s", task_id)
 
-    asyncio.create_task(_safe_run())
+    _create_tracked_task(_safe_run())
     return {"message": "Pipeline rerun started", "task_id": task_id}
