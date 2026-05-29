@@ -4,16 +4,24 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_session
-from app.models.database import TaskModel
+from app.models.database import (
+    ConstraintModel,
+    MetricsModel,
+    ReportModel,
+    SourceModel,
+    TaskModel,
+    TraceModel,
+)
 from app.orchestration.runner import run_pipeline
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+STARTABLE_TASK_STATUSES = ("pending", "failed", "completed")
 
 
 # ---------------------------------------------------------------------------
@@ -75,12 +83,37 @@ async def run_task(task_id: str, session: AsyncSession = Depends(get_session)):
     task = await session.get(TaskModel, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    if task.status not in ("pending", "failed"):
+
+    result = await session.execute(
+        update(TaskModel)
+        .where(
+            TaskModel.id == task_id,
+            TaskModel.status.in_(STARTABLE_TASK_STATUSES),
+        )
+        .values(status="collecting", updated_at=datetime.utcnow())
+    )
+
+    if result.rowcount == 0:
+        await session.rollback()
+        current_task = await session.get(TaskModel, task_id)
+        current_status = current_task.status if current_task else "unknown"
         raise HTTPException(
             status_code=409,
-            detail=f"Task is already in '{task.status}' state, cannot restart",
+            detail=f"Task is already in '{current_status}' state, cannot restart",
         )
-    # Launch pipeline in background with exception logging
+
+    for model in (
+        SourceModel,
+        ReportModel,
+        TraceModel,
+        MetricsModel,
+        ConstraintModel,
+    ):
+        await session.execute(delete(model).where(model.task_id == task_id))
+
+    await session.commit()
+
+    # Launch pipeline in background with exception logging only after claim is committed.
     async def _safe_run():
         try:
             await run_pipeline(task_id)
