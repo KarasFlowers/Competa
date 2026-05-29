@@ -19,6 +19,7 @@ from app.models.database import (
 from app.orchestration.graph import pipeline_graph
 from app.orchestration.state import PipelineState
 from app.schemas.trace import EventType, TraceEvent
+from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,22 @@ async def run_pipeline(task_id: str) -> None:
             return
 
         try:
+            # Load existing sources and constraints (for rerun scenarios)
+            existing_srcs = await session.execute(
+                select(SourceModel).where(SourceModel.task_id == task_id)
+            )
+            existing_sources = [
+                {"id": s.id, "type": s.type, "url": s.url, "title": s.title,
+                 "content_snippet": s.content_snippet, "fetched_at": str(s.fetched_at)}
+                for s in existing_srcs.scalars().all()
+            ]
+            existing_cons = await session.execute(
+                select(ConstraintModel).where(ConstraintModel.task_id == task_id)
+            )
+            existing_constraints = [
+                c.constraint_value for c in existing_cons.scalars().all()
+            ]
+
             # Build initial state
             initial_state: PipelineState = {
                 "task_id": task_id,
@@ -77,7 +94,7 @@ async def run_pipeline(task_id: str) -> None:
                     "competitors": task.competitors or [],
                     "industry": task.industry or "",
                 },
-                "sources": [],
+                "sources": existing_sources,
                 "analysis": {},
                 "report": {},
                 "qa_feedback": {},
@@ -88,7 +105,7 @@ async def run_pipeline(task_id: str) -> None:
                 "status": "collecting",
                 "error": "",
                 "retry_count": 0,
-                "constraints": [],
+                "constraints": existing_constraints,
             }
             final_state: PipelineState = dict(initial_state)
 
@@ -101,7 +118,11 @@ async def run_pipeline(task_id: str) -> None:
                     await session.commit()
 
             # Persist sources (preserve Pydantic ID so evidence_ids in claims resolve)
+            # Skip sources that already exist in DB (rerun scenario)
+            existing_src_ids = {s.id for s in existing_srcs.scalars().all()}
             for src_data in final_state.get("sources", []):
+                if src_data.get("id") in existing_src_ids:
+                    continue
                 source = SourceModel(
                     id=src_data.get("id"),  # preserve original ID for citation linking
                     task_id=task_id,

@@ -7,6 +7,20 @@ from openai import AsyncOpenAI
 
 from app.config import settings
 
+# Mock mode flag
+_is_mock = False
+
+
+def is_mock_mode() -> bool:
+    """Check if mock LLM mode is enabled."""
+    return _is_mock
+
+
+def set_mock_mode(enabled: bool) -> None:
+    """Enable or disable mock LLM mode."""
+    global _is_mock
+    _is_mock = enabled
+
 
 @dataclass
 class LLMResponse:
@@ -56,6 +70,11 @@ async def call_llm(
     Returns:
         LLMResponse with content and usage stats.
     """
+    # Route to mock if enabled
+    if settings.LLM_MOCK or _is_mock:
+        from app.llm.mock_client import call_mock_llm
+        return await call_mock_llm(messages)
+
     client = _get_client()
     model = model or settings.LLM_MODEL or "gpt-4o-mini"
 

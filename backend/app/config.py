@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     LLM_API_KEY: str = ""
     LLM_BASE_URL: str = ""
     LLM_MODEL: str = ""
+    LLM_MOCK: bool = False
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

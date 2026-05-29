@@ -15,10 +15,19 @@ from app.agents.analyst import AnalystAgent
 from app.agents.collector import CollectorAgent
 from app.agents.qa import QAAgent
 from app.agents.writer import WriterAgent
+from app.api.sse import publish_event as _publish_event
 from app.orchestration.state import PipelineState
 from app.schemas.trace import EventType, TraceEvent
 
 logger = logging.getLogger(__name__)
+
+
+def publish_event(task_id: str, event: dict) -> None:
+    """Publish SSE event, silently ignoring failures."""
+    try:
+        _publish_event(task_id, event)
+    except Exception:
+        pass
 
 MAX_RETRIES = 2
 
@@ -31,7 +40,9 @@ _qa = QAAgent()
 
 async def collect_node(state: PipelineState) -> dict:
     """Run the Collector Agent."""
-    logger.info("DAG: collect_node starting for task %s", state.get("task_id"))
+    task_id = state.get("task_id", "")
+    logger.info("DAG: collect_node starting for task %s", task_id)
+    publish_event(task_id, {"agent": "collector", "status": "running"})
     task = state.get("task", {})
     constraints = [c if isinstance(c, str) else str(c) for c in state.get("constraints", [])]
 
@@ -42,6 +53,12 @@ async def collect_node(state: PipelineState) -> dict:
         "constraints": constraints,
     })
 
+    llm_info = result.get("_llm_response", {})
+    publish_event(task_id, {
+        "agent": "collector", "status": "completed",
+        "duration": llm_info.get("duration"),
+        "tokens": (llm_info.get("input_tokens", 0) or 0) + (llm_info.get("output_tokens", 0) or 0),
+    })
     existing_traces = state.get("traces", [])
     return {
         "sources": result["sources"],
@@ -52,7 +69,9 @@ async def collect_node(state: PipelineState) -> dict:
 
 async def analyze_node(state: PipelineState) -> dict:
     """Run the Analyst Agent."""
-    logger.info("DAG: analyze_node starting for task %s", state.get("task_id"))
+    task_id = state.get("task_id", "")
+    logger.info("DAG: analyze_node starting for task %s", task_id)
+    publish_event(task_id, {"agent": "analyst", "status": "running"})
     constraints = [c if isinstance(c, str) else str(c) for c in state.get("constraints", [])]
 
     result = await _analyst.run({
@@ -60,6 +79,12 @@ async def analyze_node(state: PipelineState) -> dict:
         "constraints": constraints,
     })
 
+    llm_info = result.get("_llm_response", {})
+    publish_event(task_id, {
+        "agent": "analyst", "status": "completed",
+        "duration": llm_info.get("duration"),
+        "tokens": (llm_info.get("input_tokens", 0) or 0) + (llm_info.get("output_tokens", 0) or 0),
+    })
     existing_traces = state.get("traces", [])
     return {
         "analysis": result["analysis"],
@@ -70,17 +95,25 @@ async def analyze_node(state: PipelineState) -> dict:
 
 async def write_node(state: PipelineState) -> dict:
     """Run the Writer Agent."""
-    logger.info("DAG: write_node starting for task %s", state.get("task_id"))
+    task_id = state.get("task_id", "")
+    logger.info("DAG: write_node starting for task %s", task_id)
+    publish_event(task_id, {"agent": "writer", "status": "running"})
     task = state.get("task", {})
     constraints = [c if isinstance(c, str) else str(c) for c in state.get("constraints", [])]
 
     result = await _writer.run({
         "analysis": state.get("analysis", {}),
         "target_product": task.get("target_product", ""),
-        "task_id": state.get("task_id", ""),
+        "task_id": task_id,
         "constraints": constraints,
     })
 
+    llm_info = result.get("_llm_response", {})
+    publish_event(task_id, {
+        "agent": "writer", "status": "completed",
+        "duration": llm_info.get("duration"),
+        "tokens": (llm_info.get("input_tokens", 0) or 0) + (llm_info.get("output_tokens", 0) or 0),
+    })
     existing_traces = state.get("traces", [])
     return {
         "report": result["report"],
@@ -91,7 +124,9 @@ async def write_node(state: PipelineState) -> dict:
 
 async def filter_node(state: PipelineState) -> dict:
     """Remove claims without evidence from the report."""
-    logger.info("DAG: filter_node starting for task %s", state.get("task_id"))
+    task_id = state.get("task_id", "")
+    logger.info("DAG: filter_node starting for task %s", task_id)
+    publish_event(task_id, {"agent": "filter", "status": "running"})
     report = state.get("report", {})
     removed_count = 0
 
@@ -111,6 +146,10 @@ async def filter_node(state: PipelineState) -> dict:
         output_summary=f"Filtered {removed_count} claims without evidence",
     )
 
+    publish_event(task_id, {
+        "agent": "filter", "status": "completed",
+        "removed_claims": removed_count,
+    })
     return {
         "report": report,
         "traces": existing_traces + [trace.model_dump()],
@@ -120,12 +159,14 @@ async def filter_node(state: PipelineState) -> dict:
 
 async def qa_node(state: PipelineState) -> dict:
     """Run the QA Agent."""
-    logger.info("DAG: qa_node starting for task %s", state.get("task_id"))
+    task_id = state.get("task_id", "")
+    logger.info("DAG: qa_node starting for task %s", task_id)
+    publish_event(task_id, {"agent": "qa", "status": "running"})
 
     result = await _qa.run({
         "report": state.get("report", {}),
         "sources": state.get("sources", []),
-        "task_id": state.get("task_id", ""),
+        "task_id": task_id,
         "retry_count": state.get("retry_count", 0),
     })
 
@@ -150,6 +191,11 @@ async def qa_node(state: PipelineState) -> dict:
             update["status"] = "failed"
         else:
             update["status"] = "retrying"
+        publish_event(task_id, {
+            "agent": "qa", "status": "completed",
+            "passed": False, "retry_target": qa_feedback.get("retry_target", ""),
+            "retry_count": update["retry_count"],
+        })
     else:
         # Record improvement delta if this was a retry
         if state.get("retry_count", 0) > 0:
@@ -164,6 +210,10 @@ async def qa_node(state: PipelineState) -> dict:
             )
             update["traces"] = update["traces"] + [improvement_trace.model_dump()]
         update["status"] = "completed"
+        publish_event(task_id, {
+            "agent": "qa", "status": "completed", "passed": True,
+            "evidence_coverage_rate": new_metrics.get("evidence_coverage_rate", 0),
+        })
 
     return update
 

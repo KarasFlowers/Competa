@@ -53,6 +53,8 @@ class BaseAgent:
                 agent_name=self.name,
                 event_type=EventType.START,
                 input_summary=f"attempt {attempt}/{self.max_retries}",
+                prompt=user_prompt,
+                retry_attempt=attempt,
             ))
 
             try:
@@ -75,6 +77,9 @@ class BaseAgent:
                     event_type=EventType.OUTPUT,
                     output_summary=f"validated {output_schema.__name__}",
                     token_count=llm_resp.input_tokens + llm_resp.output_tokens,
+                    duration=llm_resp.duration,
+                    output_data={"schema": output_schema.__name__, "keys": list(parsed.keys()) if isinstance(parsed, dict) else []},
+                    retry_attempt=attempt,
                 ))
 
                 return validated, llm_resp, traces
@@ -88,6 +93,8 @@ class BaseAgent:
                     agent_name=self.name,
                     event_type=EventType.ERROR,
                     error_message=f"JSON parse error: {e}",
+                    duration=llm_resp.duration,
+                    retry_attempt=attempt,
                 ))
                 # Add error feedback to messages for retry
                 messages.append({"role": "assistant", "content": llm_resp.content})
@@ -106,6 +113,8 @@ class BaseAgent:
                     agent_name=self.name,
                     event_type=EventType.ERROR,
                     error_message=f"Guardrail: {e}",
+                    duration=llm_resp.duration,
+                    retry_attempt=attempt,
                 ))
                 error_details = e.to_dict()
                 messages.append({"role": "assistant", "content": llm_resp.content})
@@ -123,6 +132,7 @@ class BaseAgent:
                     agent_name=self.name,
                     event_type=EventType.ERROR,
                     error_message=str(e),
+                    retry_attempt=attempt,
                 ))
                 # Non-retryable: break instead of retrying with same input
                 break

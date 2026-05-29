@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from app.api.sse import router as sse_router
 from app.api.tasks import router as tasks_router
 from app.api.reports import router as reports_router
 from app.api.traces import router as traces_router
@@ -15,3 +16,4 @@ async def health():
 api_router.include_router(tasks_router, prefix="/tasks", tags=["tasks"])
 api_router.include_router(reports_router, prefix="/tasks", tags=["reports"])
 api_router.include_router(traces_router, prefix="/tasks", tags=["traces"])
+api_router.include_router(sse_router, prefix="/tasks", tags=["sse"])

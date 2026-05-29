@@ -29,6 +29,11 @@ class TraceEvent(BaseModel):
     output_summary: str | None = None
     token_count: int | None = None
     error_message: str | None = None
+    prompt: str | None = None
+    input_data: dict | None = None
+    output_data: dict | None = None
+    duration: float | None = None
+    retry_attempt: int | None = None
 
 
 class AgentTrace(BaseModel):
