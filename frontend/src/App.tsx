@@ -4,6 +4,7 @@ import Landing from "./pages/Landing";
 import TaskCreate from "./pages/TaskCreate";
 import TaskDetail from "./pages/TaskDetail";
 import ReportView from "./pages/ReportView";
+import TraceView from "./pages/TraceView";
 
 function App() {
   return (
@@ -13,6 +14,7 @@ function App() {
         <Route path="/tasks/new" element={<TaskCreate />} />
         <Route path="/tasks/:id" element={<TaskDetail />} />
         <Route path="/tasks/:id/report" element={<ReportView />} />
+        <Route path="/tasks/:id/traces" element={<TraceView />} />
       </Route>
     </Routes>
   );

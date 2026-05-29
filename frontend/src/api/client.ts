@@ -72,14 +72,47 @@ export interface Metrics {
   calculated_at: string;
 }
 
+export interface TraceEvent {
+  id?: string;
+  agent_name: string;
+  event_type: string;
+  timestamp?: string;
+  input_summary?: string | null;
+  output_summary?: string | null;
+  token_count?: number | null;
+  error_message?: string | null;
+  prompt?: string | null;
+  input_data?: Record<string, unknown> | null;
+  output_data?: Record<string, unknown> | null;
+  duration?: number | null;
+  retry_attempt?: number | null;
+}
+
 export interface Trace {
   id: string;
   task_id: string;
   agent_name: string;
-  events: unknown[];
+  events: TraceEvent[];
   total_duration: number | null;
   total_tokens: number | null;
   status: string;
+}
+
+export interface CorrectionPayload {
+  correction_type: "add_source" | "edit_claim" | "add_constraint";
+  data: Record<string, unknown>;
+}
+
+export interface SSEEvent {
+  agent: string;
+  status: string;
+  duration?: number | null;
+  tokens?: number | null;
+  passed?: boolean | null;
+  retry_target?: string | null;
+  retry_count?: number | null;
+  evidence_coverage_rate?: number | null;
+  removed_claims?: number | null;
 }
 
 export const taskApi = {
@@ -88,6 +121,9 @@ export const taskApi = {
   get: (id: string) => api.get<Task>(`/tasks/${id}`),
   run: (id: string) => api.post<{ message: string; task_id: string }>(`/tasks/${id}/run`),
   getStatus: (id: string) => api.get<{ id: string; status: string; target_product: string }>(`/tasks/${id}/status`),
+  submitCorrection: (id: string, correction: CorrectionPayload) =>
+    api.post<{ message: string; task_id: string }>(`/tasks/${id}/corrections`, correction),
+  rerun: (id: string) => api.post<{ message: string; task_id: string }>(`/tasks/${id}/rerun`),
 };
 
 export const reportApi = {

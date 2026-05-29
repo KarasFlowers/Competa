@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import {
+  taskApi,
   reportApi,
   sourceApi,
   type Report,
@@ -8,6 +9,7 @@ import {
   type ReportSection,
   type Claim,
 } from "../api/client";
+import { Edit3 } from "lucide-react";
 
 export default function ReportView() {
   const { id } = useParams<{ id: string }>();
@@ -15,12 +17,38 @@ export default function ReportView() {
   const [sources, setSources] = useState<Source[]>([]);
   const [selectedSource, setSelectedSource] = useState<Source | null>(null);
   const [error, setError] = useState("");
+  const [editingClaim, setEditingClaim] = useState<Claim | null>(null);
+  const [editedContent, setEditedContent] = useState("");
+
+  const refreshReport = () => {
+    if (!id) return;
+    reportApi.get(id).then((r) => setReport(r.data)).catch(() => setError("Report not found"));
+  };
 
   useEffect(() => {
     if (!id) return;
-    reportApi.get(id).then((r) => setReport(r.data)).catch(() => setError("Report not found"));
+    refreshReport();
     sourceApi.list(id).then((r) => setSources(r.data)).catch(() => {});
   }, [id]);
+
+  const handleEditClaim = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!id || !editingClaim?.id) return;
+    
+    try {
+      await taskApi.submitCorrection(id, {
+        correction_type: "edit_claim",
+        data: {
+          claim_id: editingClaim.id,
+          content: editedContent
+        }
+      });
+      setEditingClaim(null);
+      refreshReport();
+    } catch (err) {
+      alert("Failed to edit claim");
+    }
+  };
 
   const sourceMap = new Map(sources.map((s) => [s.id, s]));
 
@@ -69,6 +97,10 @@ export default function ReportView() {
           section={section}
           depth={0}
           onCiteClick={handleCiteClick}
+          onEditClaim={(claim) => {
+            setEditingClaim(claim);
+            setEditedContent(claim.content);
+          }}
         />
       ))}
 
@@ -96,6 +128,42 @@ export default function ReportView() {
       {selectedSource && (
         <SourceModal source={selectedSource} onClose={() => setSelectedSource(null)} />
       )}
+
+      {/* Edit Claim Modal */}
+      {editingClaim && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md mx-4">
+            <h2 className="text-xl font-bold mb-4">修正结论</h2>
+            <form onSubmit={handleEditClaim} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">结论内容</label>
+                <textarea
+                  required
+                  rows={4}
+                  className="w-full border rounded-lg p-2"
+                  value={editedContent}
+                  onChange={(e) => setEditedContent(e.target.value)}
+                />
+              </div>
+              <div className="flex gap-3 justify-end mt-6">
+                <button
+                  type="button"
+                  onClick={() => setEditingClaim(null)}
+                  className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg"
+                >
+                  取消
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                >
+                  保存修正
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -104,10 +172,12 @@ function SectionBlock({
   section,
   depth,
   onCiteClick,
+  onEditClaim,
 }: {
   section: ReportSection;
   depth: number;
   onCiteClick: (sourceId: string) => void;
+  onEditClaim: (claim: Claim) => void;
 }) {
   const HeadingTag = depth === 0 ? "h2" : "h3";
   const headingClass = depth === 0
@@ -123,12 +193,12 @@ function SectionBlock({
       {section.claims && section.claims.length > 0 && (
         <ul className="space-y-2 ml-4">
           {section.claims.map((claim, j) => (
-            <ClaimBlock key={j} claim={claim} onCiteClick={onCiteClick} />
+            <ClaimBlock key={j} claim={claim} onCiteClick={onCiteClick} onEditClaim={onEditClaim} />
           ))}
         </ul>
       )}
       {section.subsections?.map((sub, k) => (
-        <SectionBlock key={k} section={sub} depth={depth + 1} onCiteClick={onCiteClick} />
+        <SectionBlock key={k} section={sub} depth={depth + 1} onCiteClick={onCiteClick} onEditClaim={onEditClaim} />
       ))}
     </section>
   );
@@ -137,13 +207,25 @@ function SectionBlock({
 function ClaimBlock({
   claim,
   onCiteClick,
+  onEditClaim,
 }: {
   claim: Claim;
   onCiteClick: (sourceId: string) => void;
+  onEditClaim: (claim: Claim) => void;
 }) {
   return (
-    <li className="bg-gray-50 border border-gray-200 rounded-lg p-3">
+    <li className="bg-gray-50 border border-gray-200 rounded-lg p-3 group relative pr-10">
       <p className="text-gray-800 text-sm">{claim.content}</p>
+      
+      {claim.id && (
+        <button
+          onClick={() => onEditClaim(claim)}
+          className="absolute right-3 top-3 text-gray-400 hover:text-blue-600 opacity-0 group-hover:opacity-100 transition-opacity"
+          title="修正结论"
+        >
+          <Edit3 className="w-4 h-4" />
+        </button>
+      )}
       {claim.evidence_ids && claim.evidence_ids.length > 0 && (
         <div className="flex gap-1 mt-2">
           {claim.evidence_ids.map((eid) => (
