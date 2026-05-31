@@ -5,11 +5,20 @@ const api = axios.create({
   headers: { "Content-Type": "application/json" },
 });
 
+export interface CompetitorInput {
+  name: string;
+  category: string;  // direct | indirect | substitute
+  website?: string | null;
+  notes?: string;
+  tags?: string[];
+}
+
 export interface Task {
   id: string;
   industry: string;
   target_product: string;
-  competitors: string[];
+  competitors: (string | CompetitorInput)[];
+  our_product_notes: string;
   status: string;
   created_at: string;
   updated_at: string;
@@ -18,7 +27,8 @@ export interface Task {
 export interface TaskCreatePayload {
   industry?: string;
   target_product: string;
-  competitors?: string[];
+  competitors?: (string | CompetitorInput)[];
+  our_product_notes?: string;
 }
 
 export interface Report {

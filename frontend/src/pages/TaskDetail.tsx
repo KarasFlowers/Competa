@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
 import { taskApi, metricsApi, type Task, type Metrics, type SSEEvent } from "../api/client";
+import { useToast } from "../components/Toast";
 import { Activity, Plus, RefreshCw } from "lucide-react";
 
 const ACTIVE_STATUSES = new Set([
@@ -26,6 +27,7 @@ const STATUS_COLORS: Record<string, string> = {
 
 export default function TaskDetail() {
   const { id } = useParams<{ id: string }>();
+  const { toast } = useToast();
   const [task, setTask] = useState<Task | null>(null);
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [polling, setPolling] = useState(false);
@@ -59,15 +61,6 @@ export default function TaskDetail() {
 
       const source = new EventSource(`/api/tasks/${id}/events`);
       eventSourceRef.current = source;
-
-      source.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.agent) {
-            setSseEvent(data as SSEEvent);
-          }
-        } catch (e) {}
-      };
 
       source.addEventListener("connected", () => {
         console.log("SSE Connected");
@@ -155,9 +148,9 @@ export default function TaskDetail() {
       setShowSourceModal(false);
       setNewSource({ title: "", url: "", content_snippet: "", type: "url" });
       // Suggest rerun
-      alert("资料已补充！请点击“重新生成”以纳入新资料并修正报告。");
+      toast("资料已补充！请点击「重新生成」以纳入新资料并修正报告。", "success");
     } catch (err) {
-      alert("补充资料失败");
+      toast("补充资料失败", "error");
     }
   };
 
@@ -229,9 +222,22 @@ export default function TaskDetail() {
       <section>
         <h2 className="text-lg font-semibold text-gray-800 mb-2">Competitors</h2>
         <div className="flex flex-wrap gap-2">
-          {task.competitors.map((c, i) => (
-            <span key={i} className="px-3 py-1 bg-gray-100 rounded-full text-sm text-gray-700">{c}</span>
-          ))}
+          {task.competitors.map((c, i) => {
+            const name = typeof c === "string" ? c : c.name;
+            const category = typeof c === "string" ? "" : c.category;
+            const website = typeof c === "string" ? null : c.website;
+            return (
+              <span key={i} className="inline-flex items-center gap-1 px-3 py-1 bg-gray-100 rounded-full text-sm text-gray-700">
+                {name}
+                {category && category !== "direct" && (
+                  <span className="text-xs text-gray-400">({category})</span>
+                )}
+                {website && (
+                  <a href={website} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline text-xs ml-1">🔗</a>
+                )}
+              </span>
+            );
+          })}
           {task.competitors.length === 0 && (
             <span className="text-sm text-gray-400">None specified</span>
           )}

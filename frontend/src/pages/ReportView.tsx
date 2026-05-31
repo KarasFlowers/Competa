@@ -9,7 +9,8 @@ import {
   type ReportSection,
   type Claim,
 } from "../api/client";
-import { Edit3 } from "lucide-react";
+import { Edit3, Download } from "lucide-react";
+import { useToast } from "../components/Toast";
 
 export default function ReportView() {
   const { id } = useParams<{ id: string }>();
@@ -19,6 +20,12 @@ export default function ReportView() {
   const [error, setError] = useState("");
   const [editingClaim, setEditingClaim] = useState<Claim | null>(null);
   const [editedContent, setEditedContent] = useState("");
+  const { toast } = useToast();
+
+  const handleExport = (format: string) => {
+    if (!id) return;
+    window.open(`/api/reports/${id}/export?format=${format}`, "_blank");
+  };
 
   const refreshReport = () => {
     if (!id) return;
@@ -44,9 +51,10 @@ export default function ReportView() {
         }
       });
       setEditingClaim(null);
+      toast("结论已修正", "success");
       refreshReport();
     } catch (err) {
-      alert("Failed to edit claim");
+      toast("Failed to edit claim", "error");
     }
   };
 
@@ -79,6 +87,20 @@ export default function ReportView() {
             {report.status}
           </span>
           <span>{new Date(report.created_at).toLocaleString()}</span>
+        </div>
+        <div className="flex gap-2 mt-3">
+          <button
+            onClick={() => handleExport("markdown")}
+            className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+          >
+            <Download className="w-3.5 h-3.5" /> Markdown
+          </button>
+          <button
+            onClick={() => handleExport("docx")}
+            className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+          >
+            <Download className="w-3.5 h-3.5" /> Word
+          </button>
         </div>
       </div>
 
