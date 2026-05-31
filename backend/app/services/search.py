@@ -208,3 +208,91 @@ def reset_search_provider() -> None:
     """Reset the singleton — useful for testing."""
     global _provider_instance
     _provider_instance = "uninitialized"
+
+
+# ---------------------------------------------------------------------------
+# Standalone webpage fetcher (for deep-fetching specific URLs)
+# ---------------------------------------------------------------------------
+
+# Internal network / unsafe URL patterns to block
+_BLOCKED_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
+_BLOCKED_SCHEMES = {"file", "ftp"}
+
+
+def _is_url_safe(url: str) -> bool:
+    """Reject internal / unsafe URLs to prevent SSRF."""
+    from urllib.parse import urlparse
+
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False
+    if parsed.scheme in _BLOCKED_SCHEMES:
+        return False
+    if parsed.hostname in _BLOCKED_HOSTS:
+        return False
+    if parsed.hostname and parsed.hostname.endswith(".local"):
+        return False
+    return True
+
+
+async def fetch_webpage(
+    url: str,
+    *,
+    max_chars: int = 8000,
+    timeout: float = 20.0,
+) -> dict[str, str | None]:
+    """Fetch a single URL and return cleaned text content.
+
+    Returns dict with keys: url, title, content (or None on failure).
+    Raises ValueError if URL is unsafe.
+    """
+    if not _is_url_safe(url):
+        raise ValueError(f"URL blocked (internal/unsafe): {url}")
+
+    try:
+        from bs4 import BeautifulSoup
+    except ImportError:
+        logger.warning("beautifulsoup4 not installed; cannot fetch webpage content")
+        return {"url": url, "title": None, "content": None}
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=timeout,
+            follow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; Competa/0.1)"},
+        ) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Extract title
+        title_tag = soup.find("title")
+        title = title_tag.get_text(strip=True) if title_tag else url
+
+        # Remove noise elements
+        for tag in soup(["script", "style", "nav", "footer", "header", "aside", "iframe"]):
+            tag.decompose()
+
+        text = soup.get_text(separator="\n", strip=True)
+        # Truncate to max_chars
+        if len(text) > max_chars:
+            text = text[:max_chars] + "\n\n[Content truncated]"
+
+        return {"url": url, "title": title, "content": text}
+
+    except Exception:
+        logger.warning("Failed to fetch webpage: %s", url, exc_info=True)
+        return {"url": url, "title": None, "content": None}
+
+
+async def fetch_webpages(
+    urls: list[str],
+    *,
+    max_chars: int = 8000,
+    timeout: float = 20.0,
+) -> list[dict[str, str | None]]:
+    """Fetch multiple URLs in parallel and return results."""
+    tasks = [fetch_webpage(u, max_chars=max_chars, timeout=timeout) for u in urls]
+    return await asyncio.gather(*tasks, return_exceptions=False)

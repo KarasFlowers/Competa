@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Annotated, Union
 
@@ -25,7 +25,7 @@ class Source(BaseModel):
     url: str | None = None
     title: str
     content_snippet: str = ""
-    fetched_at: datetime = Field(default_factory=datetime.utcnow)
+    fetched_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class Evidence(BaseModel):
@@ -67,11 +67,57 @@ class AnalyzeRequest(BaseModel):
     )
 
 
+class FeatureNode(BaseModel):
+    name: str = ""
+    description: str = ""
+    status: str = "supported"
+    children: list[FeatureNode] = Field(default_factory=list)
+
+
+class FeatureTree(BaseModel):
+    product_name: str = ""
+    root_nodes: list[FeatureNode] = Field(default_factory=list)
+
+
+class PricingTier(BaseModel):
+    name: str = ""
+    price: float = 0
+    currency: str = "USD"
+    period: str = "monthly"
+    features: list[str] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+
+
+class PricingModel(BaseModel):
+    product_name: str = ""
+    model_type: str = ""
+    tiers: list[PricingTier] = Field(default_factory=list)
+
+
+class Persona(BaseModel):
+    segment_name: str = ""
+    demographics: str = ""
+    pain_points: list[str] = Field(default_factory=list)
+    needs: list[str] = Field(default_factory=list)
+    product_usage_patterns: str = ""
+
+
+class SWOTItem(BaseModel):
+    category: str = ""
+    content: str = ""
+    evidence_ids: list[str] = Field(default_factory=list)
+
+
+class SWOTAnalysis(BaseModel):
+    product_name: str = ""
+    items: list[SWOTItem] = Field(default_factory=list)
+
+
 class AnalyzeResult(BaseModel):
-    feature_trees: list = Field(default_factory=list)
-    pricing_models: list = Field(default_factory=list)
-    personas: list = Field(default_factory=list)
-    swot_analyses: list = Field(default_factory=list)
+    feature_trees: list[FeatureTree] = Field(default_factory=list)
+    pricing_models: list[PricingModel] = Field(default_factory=list)
+    personas: list[Persona] = Field(default_factory=list)
+    swot_analyses: list[SWOTAnalysis] = Field(default_factory=list)
 
 
 class WriteRequest(BaseModel):
@@ -84,11 +130,18 @@ class WriteResult(BaseModel):
     report: dict  # serialised Report — avoids circular import
 
 
+class QAIssue(BaseModel):
+    issue_type: str = ""
+    field_path: str = ""
+    description: str = ""
+    severity: str = "warning"
+
+
 class QAFeedback(BaseModel):
     passed: bool
-    issues: list = Field(default_factory=list)  # list[QAIssue]
+    issues: list[QAIssue] = Field(default_factory=list)
     retry_target: str = ""
-    constraints: list = Field(default_factory=list)  # list[ConstraintRule]
+    constraints: list[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -125,4 +178,4 @@ class AgentMessage(BaseModel):
     to_agent: str
     message_type: MessageType
     payload: MessagePayload
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))

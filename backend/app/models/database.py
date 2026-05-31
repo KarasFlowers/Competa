@@ -20,6 +20,7 @@ class TaskModel(Base):
     industry: Mapped[str] = mapped_column(String(255), default="")
     target_product: Mapped[str] = mapped_column(String(255), default="")
     competitors: Mapped[dict] = mapped_column(JSON, default=list)
+    our_product_notes: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(32), default="pending")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

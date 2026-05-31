@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -52,17 +52,28 @@ def _find_claim_recursive(sections: list[dict], claim_id: str) -> dict | None:
 # Request / Response schemas (API-level, separate from domain schemas)
 # ---------------------------------------------------------------------------
 
+class CompetitorInput(BaseModel):
+    """Structured competitor entry — mirrors competitorsmart's CompetitorInfo."""
+    name: str
+    category: str = "direct"  # direct | indirect | substitute
+    website: str | None = None
+    notes: str = ""  # free-form notes, sales intel, etc.
+    tags: list[str] = Field(default_factory=list)
+
+
 class TaskCreate(BaseModel):
     industry: str = ""
     target_product: str
-    competitors: list[str] = Field(default_factory=list)
+    competitors: list[str | CompetitorInput] = Field(default_factory=list)
+    our_product_notes: str = ""  # context about our own product
 
 
 class TaskResponse(BaseModel):
     id: str
     industry: str
     target_product: str
-    competitors: list
+    competitors: list[str | CompetitorInput]
+    our_product_notes: str = ""
     status: str
     created_at: datetime
     updated_at: datetime
@@ -76,10 +87,18 @@ class TaskResponse(BaseModel):
 
 @router.post("", response_model=TaskResponse, status_code=201)
 async def create_task(body: TaskCreate, session: AsyncSession = Depends(get_session)):
+    # Normalize competitors: string → {"name": str}, CompetitorInput → dict
+    competitors_data = []
+    for c in body.competitors:
+        if isinstance(c, str):
+            competitors_data.append({"name": c, "category": "direct"})
+        else:
+            competitors_data.append(c.model_dump())
     task = TaskModel(
         industry=body.industry,
         target_product=body.target_product,
-        competitors=body.competitors,
+        competitors=competitors_data,
+        our_product_notes=body.our_product_notes,
     )
     session.add(task)
     await session.commit()
@@ -114,7 +133,7 @@ async def run_task(task_id: str, session: AsyncSession = Depends(get_session)):
             TaskModel.id == task_id,
             TaskModel.status.in_(STARTABLE_TASK_STATUSES),
         )
-        .values(status="collecting", updated_at=datetime.utcnow())
+        .values(status="collecting", updated_at=datetime.now(UTC))
     )
 
     if result.rowcount == 0:
@@ -270,7 +289,7 @@ async def rerun_task(task_id: str, session: AsyncSession = Depends(get_session))
         await session.execute(delete(model).where(model.task_id == task_id))
 
     task.status = "collecting"
-    task.updated_at = datetime.utcnow()
+    task.updated_at = datetime.now(UTC)
     await session.commit()
 
     async def _safe_run():

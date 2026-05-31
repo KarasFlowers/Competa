@@ -13,7 +13,7 @@ class TraceResponse(BaseModel):
     id: str
     task_id: str
     agent_name: str
-    events: list | dict
+    events: list
     total_duration: float | None
     total_tokens: int | None
     status: str

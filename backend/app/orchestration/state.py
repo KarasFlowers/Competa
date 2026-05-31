@@ -20,3 +20,4 @@ class PipelineState(TypedDict, total=False):
     error: str
     retry_count: int
     constraints: list[str]
+    screenshot_paths: list[dict[str, str | None]]

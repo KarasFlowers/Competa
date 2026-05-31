@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 
 from pydantic import BaseModel, Field
@@ -33,7 +33,7 @@ class ConstraintRule(BaseModel):
     constraint_type: str
     constraint_value: str
     applied_to: str
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class TaskMetrics(BaseModel):
@@ -42,4 +42,4 @@ class TaskMetrics(BaseModel):
     claim_count: int = 0
     evidence_coverage_rate: float = Field(ge=0.0, le=1.0, default=0.0)
     manual_correction_count: int = 0
-    calculated_at: datetime = Field(default_factory=datetime.utcnow)
+    calculated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 
 from pydantic import BaseModel, Field
@@ -24,7 +24,7 @@ class TraceEvent(BaseModel):
     id: str = Field(default_factory=lambda: uuid.uuid4().hex)
     agent_name: str
     event_type: EventType
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     input_summary: str | None = None
     output_summary: str | None = None
     token_count: int | None = None

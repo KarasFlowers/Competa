@@ -1,6 +1,6 @@
 """LangGraph DAG with QA feedback loop.
 
-Flow: collect → analyze → write → filter → qa → (qa_router)
+Flow: collect → analyze → write → screenshot → filter → qa → (qa_router)
 qa_router routes to END (pass) or back to collect/analyze/write (fail, up to MAX_RETRIES).
 """
 
@@ -16,8 +16,10 @@ from app.agents.collector import CollectorAgent
 from app.agents.qa import QAAgent
 from app.agents.writer import WriterAgent
 from app.api.sse import publish_event as _publish_event
+from app.guardrails.report_validator import validate_report_completeness
 from app.orchestration.state import PipelineState
 from app.schemas.trace import EventType, TraceEvent
+from app.services.screenshot import screenshot_webpages
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +32,7 @@ def publish_event(task_id: str, event: dict) -> None:
         pass
 
 MAX_RETRIES = 2
+MAX_CONSTRAINTS = 10
 
 # Singleton agent instances
 _collector = CollectorAgent()
@@ -50,6 +53,8 @@ async def collect_node(state: PipelineState) -> dict:
         "target_product": task.get("target_product", ""),
         "competitors": task.get("competitors", []),
         "industry": task.get("industry", ""),
+        "our_product_notes": task.get("our_product_notes", ""),
+        "focus_areas": task.get("focus_areas"),
         "constraints": constraints,
     })
 
@@ -122,21 +127,85 @@ async def write_node(state: PipelineState) -> dict:
     }
 
 
+def _filter_sections_recursive(sections: list[dict]) -> tuple[list[dict], int]:
+    """Recursively filter claims without evidence from sections and subsections.
+
+    Returns (filtered_sections, removed_count).
+    """
+    removed = 0
+    filtered: list[dict] = []
+    for section in sections:
+        claims = section.get("claims", [])
+        valid_claims = [c for c in claims if c.get("evidence_ids")]
+        removed += len(claims) - len(valid_claims)
+
+        sub_sections = section.get("subsections", [])
+        filtered_subs, sub_removed = _filter_sections_recursive(sub_sections)
+        removed += sub_removed
+
+        filtered.append({**section, "claims": valid_claims, "subsections": filtered_subs})
+    return filtered, removed
+
+
+async def screenshot_node(state: PipelineState) -> dict:
+    """Capture screenshots of competitor websites for visual evidence."""
+    task_id = state.get("task_id", "")
+    logger.info("DAG: screenshot_node starting for task %s", task_id)
+    publish_event(task_id, {"agent": "screenshot", "status": "running"})
+
+    # Collect URLs to screenshot: competitor websites + top source URLs
+    urls_to_screenshot: list[str] = []
+    competitors = state.get("task", {}).get("competitors", [])
+    for c in competitors:
+        if isinstance(c, dict) and c.get("website"):
+            urls_to_screenshot.append(c["website"])
+
+    # Add top source URLs (limit to avoid excessive screenshots)
+    sources = state.get("sources", [])
+    for s in sources[:5]:
+        url = s.get("url", "")
+        if url and url not in urls_to_screenshot:
+            urls_to_screenshot.append(url)
+
+    # Cap at 8 screenshots total
+    urls_to_screenshot = urls_to_screenshot[:8]
+
+    screenshot_results: list[dict[str, str | None]] = []
+    if urls_to_screenshot:
+        try:
+            screenshot_results = await screenshot_webpages(urls_to_screenshot, task_id)
+        except Exception:
+            logger.warning("Screenshot batch failed for task %s", task_id, exc_info=True)
+
+    successful = [r for r in screenshot_results if r.get("path")]
+    existing_traces = state.get("traces", [])
+    trace = TraceEvent(
+        agent_name="screenshot",
+        event_type=EventType.OUTPUT,
+        output_summary=f"Captured {len(successful)} screenshots from {len(urls_to_screenshot)} URLs",
+    )
+
+    publish_event(task_id, {
+        "agent": "screenshot", "status": "completed",
+        "screenshots_captured": len(successful),
+    })
+    return {
+        "screenshot_paths": screenshot_results,
+        "traces": existing_traces + [trace.model_dump()],
+        "status": "filter",
+    }
+
+
 async def filter_node(state: PipelineState) -> dict:
     """Remove claims without evidence from the report."""
     task_id = state.get("task_id", "")
     logger.info("DAG: filter_node starting for task %s", task_id)
     publish_event(task_id, {"agent": "filter", "status": "running"})
     report = state.get("report", {})
-    removed_count = 0
 
-    filtered_sections = []
-    for section in report.get("sections", []):
-        claims = section.get("claims", [])
-        valid_claims = [c for c in claims if c.get("evidence_ids")]
-        removed_count += len(claims) - len(valid_claims)
-        filtered_sections.append({**section, "claims": valid_claims})
-
+    filtered_sections, removed_count = _filter_sections_recursive(
+        report.get("sections", [])
+    )
     report = {**report, "sections": filtered_sections}
 
     existing_traces = state.get("traces", [])
@@ -158,14 +227,26 @@ async def filter_node(state: PipelineState) -> dict:
 
 
 async def qa_node(state: PipelineState) -> dict:
-    """Run the QA Agent."""
+    """Run the QA Agent with deterministic hard validation + LLM soft check."""
     task_id = state.get("task_id", "")
     logger.info("DAG: qa_node starting for task %s", task_id)
     publish_event(task_id, {"agent": "qa", "status": "running"})
 
+    report = state.get("report", {})
+    sources = state.get("sources", [])
+
+    # --- Deterministic hard validation (code-based, no LLM) ---
+    hard_issues = validate_report_completeness(report, sources)
+    if hard_issues:
+        logger.info(
+            "DAG: qa_node hard validation found %d issue(s) for task %s",
+            len(hard_issues), task_id,
+        )
+
+    # --- LLM-based soft QA check ---
     result = await _qa.run({
-        "report": state.get("report", {}),
-        "sources": state.get("sources", []),
+        "report": report,
+        "sources": sources,
         "task_id": task_id,
         "retry_count": state.get("retry_count", 0),
     })
@@ -173,6 +254,27 @@ async def qa_node(state: PipelineState) -> dict:
     qa_feedback = result["qa_feedback"]
     new_metrics = result["metrics"]
     existing_traces = state.get("traces", [])
+
+    # Merge hard-validated issues into LLM QA feedback
+    if hard_issues:
+        # Add hard issues that the LLM didn't already catch
+        llm_issue_keys = {
+            (i.get("issue_type"), i.get("field_path"))
+            for i in qa_feedback.get("issues", [])
+        }
+        for hi in hard_issues:
+            key = (hi["issue_type"], hi["field_path"])
+            if key not in llm_issue_keys:
+                qa_feedback["issues"].append(hi)
+        # If any hard issue is critical, force passed=False
+        if any(i.get("severity") == "critical" for i in hard_issues):
+            qa_feedback["passed"] = False
+        # Convert hard issues to constraint strings for retry guidance
+        from app.orchestration.constraint_resolver import issues_to_constraints
+        hard_constraints = issues_to_constraints(hard_issues)
+        if hard_constraints:
+            existing = qa_feedback.get("constraints", [])
+            qa_feedback["constraints"] = list(dict.fromkeys(existing + hard_constraints))
 
     update: dict[str, Any] = {
         "qa_feedback": qa_feedback,
@@ -184,10 +286,14 @@ async def qa_node(state: PipelineState) -> dict:
         # Save current metrics as previous for improvement tracking
         update["previous_metrics"] = state.get("metrics", {})
         update["handoff"] = result.get("handoff", {})
-        update["constraints"] = state.get("constraints", []) + qa_feedback.get("constraints", [])
+        # Deduplicate and cap constraints to prevent prompt bloat
+        existing_constraints = state.get("constraints", [])
+        new_constraints = qa_feedback.get("constraints", [])
+        merged = list(dict.fromkeys(existing_constraints + new_constraints))
+        update["constraints"] = merged[-MAX_CONSTRAINTS:] if len(merged) > MAX_CONSTRAINTS else merged
         update["retry_count"] = state.get("retry_count", 0) + 1
         # Mark failed if retries exhausted, otherwise retrying
-        if update["retry_count"] > MAX_RETRIES:
+        if update["retry_count"] >= MAX_RETRIES:
             update["status"] = "failed"
         else:
             update["status"] = "retrying"
@@ -226,7 +332,7 @@ def qa_router(state: PipelineState) -> str:
     if qa.get("passed"):
         return END
 
-    if retry_count > MAX_RETRIES:
+    if retry_count >= MAX_RETRIES:
         logger.warning("Task %s: max retries exceeded, ending as failed", state.get("task_id"))
         return END
 
@@ -246,13 +352,15 @@ def build_graph() -> StateGraph:
     graph.add_node("collect", collect_node)
     graph.add_node("analyze", analyze_node)
     graph.add_node("write", write_node)
+    graph.add_node("screenshot", screenshot_node)
     graph.add_node("filter", filter_node)
     graph.add_node("qa", qa_node)
 
     graph.set_entry_point("collect")
     graph.add_edge("collect", "analyze")
     graph.add_edge("analyze", "write")
-    graph.add_edge("write", "filter")
+    graph.add_edge("write", "screenshot")
+    graph.add_edge("screenshot", "filter")
     graph.add_edge("filter", "qa")
     graph.add_conditional_edges("qa", qa_router)
 

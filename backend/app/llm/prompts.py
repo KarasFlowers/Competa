@@ -41,23 +41,60 @@ Rules:
 """
 
 
+def _format_competitors(competitors: list[str] | list[dict]) -> str:
+    """Format competitor list for prompt — handles both plain strings and structured dicts."""
+    lines: list[str] = []
+    for c in competitors:
+        if isinstance(c, str):
+            lines.append(f"  - {c}")
+        elif isinstance(c, dict):
+            name = c.get("name", "Unknown")
+            category = c.get("category", "direct")
+            website = c.get("website", "")
+            notes = c.get("notes", "")
+            tags = c.get("tags", [])
+            line = f"  - {name} (category: {category}"
+            if website:
+                line += f", website: {website}"
+            if tags:
+                line += f", tags: {', '.join(tags)}"
+            line += ")"
+            if notes:
+                line += f"\n    Notes: {notes}"
+            lines.append(line)
+        else:
+            lines.append(f"  - {c}")
+    return "\n".join(lines)
+
+
 def build_collector_prompt(
     target_product: str,
-    competitors: list[str],
+    competitors: list[str] | list[dict],
     industry: str,
     focus_areas: list[str] | None = None,
     search_results: list[SearchResult] | None = None,
+    our_product_notes: str = "",
 ) -> str:
-    comp_list = ", ".join(competitors) if competitors else "general competitors"
+    comp_list = _format_competitors(competitors) if competitors else "  - general competitors"
+    # Extract plain names for the focus line
+    comp_names = []
+    for c in competitors:
+        if isinstance(c, str):
+            comp_names.append(c)
+        elif isinstance(c, dict):
+            comp_names.append(c.get("name", ""))
     focus = ", ".join(focus_areas) if focus_areas else "features, pricing, user feedback"
 
     base = (
         f"Collect competitive intelligence for the following:\n"
         f"- Target product: {target_product}\n"
-        f"- Competitors: {comp_list}\n"
+        f"- Competitors:\n{comp_list}\n"
         f"- Industry: {industry or 'general'}\n"
-        f"- Focus areas: {focus}\n\n"
+        f"- Focus areas: {focus}\n"
     )
+    if our_product_notes:
+        base += f"- Our product context: {our_product_notes}\n"
+    base += "\n"
 
     if search_results:
         # Format real search data for the LLM to structure
@@ -66,8 +103,8 @@ def build_collector_prompt(
             line = f"[{i}] {sr.title}\n    URL: {sr.url}\n    Snippet: {sr.snippet}"
             if sr.content:
                 # Truncate long content
-                content_preview = sr.content[:500]
-                if len(sr.content) > 500:
+                content_preview = sr.content[:2000]
+                if len(sr.content) > 2000:
                     content_preview += "..."
                 line += f"\n    Content: {content_preview}"
             search_data_lines.append(line)
@@ -160,6 +197,13 @@ Rules:
 - Include at least 2 pricing tiers per product if pricing info is available.
 - Generate at least 2 personas.
 - SWOT should have at least one item per category per product.
+
+Methodology Guidelines:
+- SWOT Framework: Classify each finding as Strength (internal advantage), Weakness (internal gap), Opportunity (external favorable trend), or Threat (external risk). Be specific — avoid vague items like "good product".
+- Porter's Five Forces: Consider (1) Threat of new entrants, (2) Bargaining power of buyers, (3) Bargaining power of suppliers, (4) Threat of substitutes, (5) Competitive rivalry. Flag which forces are most intense.
+- Feature Comparison Matrix: Group features into categories (Core, Differentiating, Table-stakes). Mark each feature as supported/partial/missing per product.
+- Pricing Analysis: Note pricing model type, tier structure, free tier availability, and price-per-feature value ratio.
+- Persona Segmentation: Define personas by role, company size, pain points, and buying triggers.
 """
 
 
@@ -188,6 +232,7 @@ You MUST output valid JSON matching this schema:
       "content": "string",
       "claims": [
         {
+          "id": "string (unique identifier, e.g. claim_1)",
           "content": "string",
           "evidence_ids": ["string"],
           "confidence": number (0-1),
@@ -202,10 +247,20 @@ You MUST output valid JSON matching this schema:
 Rules:
 - Include sections: Executive Summary, Feature Comparison, Pricing Analysis,
   User Personas, SWOT Analysis, Conclusions & Recommendations.
+- Every claim MUST have a unique id (e.g. "claim_1", "claim_2").
 - Every claim MUST have at least one evidence_id referencing a source.
 - Do NOT make claims without evidence.
 - Write in professional analytical tone.
 - executive_summary should highlight key findings.
+
+Report Structure Methodology:
+- Executive Summary: 200-500 chars. Lead with the most impactful finding. Include a competitive positioning statement.
+- Feature Comparison: Use a matrix format — group features as Table-stakes (must-have), Differentiating (competitive edge), and Emerging (future trend). Clearly mark gaps vs. competitors.
+- Pricing Analysis: Compare pricing models (freemium/subscription/usage-based). Calculate value-per-feature. Highlight pricing traps and lock-in risks.
+- User Personas: For each persona, describe role, pain points, buying triggers, and which product best serves them.
+- SWOT Analysis: Per competitor. Strengths/Weaknesses = internal; Opportunities/Threats = external. Cross-reference with evidence_ids.
+- Porter's Five Forces: Add a subsection assessing industry competitive intensity — which forces are most threatening.
+- Conclusions & Recommendations: Prioritize 3-5 actionable recommendations with expected impact and confidence level.
 """
 
 

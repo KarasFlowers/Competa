@@ -1,12 +1,14 @@
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_session
 from app.models.database import MetricsModel, ReportModel, SourceModel
+from app.services.export import report_to_docx, report_to_markdown
 
 router = APIRouter()
 
@@ -94,3 +96,54 @@ async def get_metrics(task_id: str, session: AsyncSession = Depends(get_session)
     if not metrics:
         raise HTTPException(status_code=404, detail="Metrics not found")
     return metrics
+
+
+@router.get("/{task_id}/export")
+async def export_report(
+    task_id: str,
+    format: str = "markdown",
+    session: AsyncSession = Depends(get_session),
+):
+    """Export report as Markdown or Word (.docx) file download."""
+    # Fetch report
+    result = await session.execute(
+        select(ReportModel)
+        .where(ReportModel.task_id == task_id)
+        .order_by(ReportModel.created_at.desc(), ReportModel.id.desc())
+    )
+    report = result.scalars().first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+
+    # Fetch sources
+    src_result = await session.execute(
+        select(SourceModel).where(SourceModel.task_id == task_id)
+    )
+    sources = [
+        {"id": s.id, "type": s.type, "url": s.url, "title": s.title, "content_snippet": s.content_snippet}
+        for s in src_result.scalars().all()
+    ]
+
+    fmt = format.lower().strip()
+    if fmt == "docx" or fmt == "word":
+        try:
+            docx_bytes = report_to_docx(report.content, sources)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=501, detail=str(exc))
+        return Response(
+            content=docx_bytes,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={
+                "Content-Disposition": f'attachment; filename="report_{task_id}.docx"'
+            },
+        )
+    else:
+        # Default: markdown
+        md = report_to_markdown(report.content, sources)
+        return Response(
+            content=md,
+            media_type="text/markdown; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="report_{task_id}.md"'
+            },
+        )

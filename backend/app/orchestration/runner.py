@@ -8,6 +8,7 @@ import time
 from fastapi.encoders import jsonable_encoder
 
 from app.db.session import async_session
+from app.guardrails.redact import safe_error_message
 from app.models.database import (
     ConstraintModel,
     MetricsModel,
@@ -74,11 +75,13 @@ async def run_pipeline(task_id: str) -> None:
             existing_srcs = await session.execute(
                 select(SourceModel).where(SourceModel.task_id == task_id)
             )
+            existing_src_rows = existing_srcs.scalars().all()
             existing_sources = [
                 {"id": s.id, "type": s.type, "url": s.url, "title": s.title,
                  "content_snippet": s.content_snippet, "fetched_at": str(s.fetched_at)}
-                for s in existing_srcs.scalars().all()
+                for s in existing_src_rows
             ]
+            existing_src_ids = {s.id for s in existing_src_rows}
             existing_cons = await session.execute(
                 select(ConstraintModel).where(ConstraintModel.task_id == task_id)
             )
@@ -93,6 +96,7 @@ async def run_pipeline(task_id: str) -> None:
                     "target_product": task.target_product,
                     "competitors": task.competitors or [],
                     "industry": task.industry or "",
+                    "our_product_notes": task.our_product_notes or "",
                 },
                 "sources": existing_sources,
                 "analysis": {},
@@ -119,7 +123,6 @@ async def run_pipeline(task_id: str) -> None:
 
             # Persist sources (preserve Pydantic ID so evidence_ids in claims resolve)
             # Skip sources that already exist in DB (rerun scenario)
-            existing_src_ids = {s.id for s in existing_srcs.scalars().all()}
             for src_data in final_state.get("sources", []):
                 if src_data.get("id") in existing_src_ids:
                     continue
@@ -174,8 +177,11 @@ async def run_pipeline(task_id: str) -> None:
                 )
                 session.add(metrics)
 
-            # Persist ratchet constraints
+            # Persist ratchet constraints (deduplicate against existing)
+            existing_constraint_values = set(existing_constraints)
             for constraint_str in final_state.get("constraints", []):
+                if str(constraint_str) in existing_constraint_values:
+                    continue
                 constraint = ConstraintModel(
                     task_id=task_id,
                     constraint_type="ratchet",
@@ -196,12 +202,12 @@ async def run_pipeline(task_id: str) -> None:
             )
 
         except Exception as e:
-            logger.exception("Pipeline failed for task %s: %s", task_id, e)
+            logger.exception("Pipeline failed for task %s: %s", task_id, safe_error_message(e))
             await session.rollback()
             task.status = "failed"
             failed_events = _build_trace_events(
                 final_state if "final_state" in locals() else {},
-                error_message=str(e),
+                error_message=safe_error_message(e),
             )
             if failed_events:
                 serialized_failed_events = _serialize_trace_events(failed_events)
