@@ -219,6 +219,7 @@ async def submit_correction(
             url=data.get("url"),
             title=data.get("title", ""),
             content_snippet=data.get("content_snippet", ""),
+            reliability_score=data.get("reliability_score", 0.5),
         )
         session.add(source)
         # Add constraint to incorporate new source on next run

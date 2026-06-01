@@ -35,6 +35,7 @@ class SourceResponse(BaseModel):
     url: str | None
     title: str
     content_snippet: str
+    reliability_score: float = 0.5
     fetched_at: datetime
 
     model_config = {"from_attributes": True}

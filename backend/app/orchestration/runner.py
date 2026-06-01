@@ -78,7 +78,8 @@ async def run_pipeline(task_id: str) -> None:
             existing_src_rows = existing_srcs.scalars().all()
             existing_sources = [
                 {"id": s.id, "type": s.type, "url": s.url, "title": s.title,
-                 "content_snippet": s.content_snippet, "fetched_at": str(s.fetched_at)}
+                 "content_snippet": s.content_snippet, "reliability_score": s.reliability_score,
+                 "fetched_at": str(s.fetched_at)}
                 for s in existing_src_rows
             ]
             existing_src_ids = {s.id for s in existing_src_rows}
@@ -133,6 +134,7 @@ async def run_pipeline(task_id: str) -> None:
                     url=src_data.get("url"),
                     title=src_data.get("title", ""),
                     content_snippet=src_data.get("content_snippet", ""),
+                    reliability_score=src_data.get("reliability_score", 0.5),
                 )
                 session.add(source)
 

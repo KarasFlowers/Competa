@@ -10,7 +10,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import Any
+from urllib.parse import urlparse
 
 from app.agents.base import BaseAgent
 from app.llm.prompts import COLLECTOR_SYSTEM, build_collector_prompt
@@ -18,6 +20,104 @@ from app.schemas.base import CollectResult
 from app.services.search import SearchResult, fetch_webpages, get_search_provider
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Source reliability scoring
+# ---------------------------------------------------------------------------
+
+# Domains known to be high-reliability official sources
+_HIGH_RELIABILITY_DOMAINS = {
+    # Company official sites
+    "doubao.com", "www.doubao.com",
+    "kimi.moonshot.cn", "moonshot.cn",
+    "chat.deepseek.com", "deepseek.com",
+    "tongyi.aliyun.com", "aliyun.com",
+    "douyin.com", "www.douyin.com",
+    "kuaishou.com", "www.kuaishou.com",
+    "xiaohongshu.com", "www.xiaohongshu.com",
+    "bilibili.com", "www.bilibili.com",
+    "cursor.com", "github.com", "trae.ai", "windsurf.com",
+    # Government / regulatory
+    "gov.cn", "sec.gov",
+    # Academic
+    "arxiv.org", "scholar.google.com",
+}
+
+# Domains for well-known news / industry reports
+_MEDIUM_RELIABILITY_DOMAINS = {
+    "36kr.com", "www.36kr.com",
+    "latepost.com", "www.latepost.com",
+    "geekpark.net", "www.geekpark.net",
+    "techcrunch.com", "www.techcrunch.com",
+    "questmobile.com.cn", "www.questmobile.com.cn",
+    "iresearch.cn", "www.iresearch.cn",
+    "bloomberg.com", "reuters.com", "wsj.com", "nytimes.com",
+}
+
+
+def score_source_reliability(
+    source_type: str,
+    url: str | None = None,
+    title: str = "",
+) -> float:
+    """Estimate source reliability on a 0-1 scale.
+
+    Scoring rules (inspired by CompetitorLens Citation Agent):
+      - 0.9-1.0: Official company sites, government filings, academic papers
+      - 0.7-0.9: Major news outlets, industry reports, verified analysts
+      - 0.5-0.7: Blog posts, social media, user reviews
+      - 0.0-0.5: Unverifiable sources, outdated information
+
+    For non-URL sources (document, interview, survey), the score is based on
+    source type alone since there's no URL to evaluate.
+    """
+    # Non-URL sources: score by type
+    if not url or source_type in ("interview", "survey"):
+        type_scores = {
+            "document": 0.7,
+            "interview": 0.6,
+            "survey": 0.55,
+            "url": 0.5,
+        }
+        return type_scores.get(source_type, 0.5)
+
+    # URL-based scoring
+    try:
+        parsed = urlparse(url.strip())
+        domain = parsed.hostname or ""
+        if not domain:
+            return 0.4
+        # Strip www. prefix for matching
+        domain_clean = re.sub(r"^www\.", "", domain)
+    except Exception:
+        return 0.4
+
+    # Check against known domain lists
+    if domain_clean in _HIGH_RELIABILITY_DOMAINS or domain in _HIGH_RELIABILITY_DOMAINS:
+        return 0.9
+    if domain_clean in _MEDIUM_RELIABILITY_DOMAINS or domain in _MEDIUM_RELIABILITY_DOMAINS:
+        return 0.75
+
+    # Heuristic: company-like domains (short, .com with product name)
+    # e.g. product.com → likely official
+    parts = domain_clean.split(".")
+    tld = parts[-1] if parts else ""
+    if tld == "com" and len(parts) == 2 and len(parts[0]) > 2:
+        return 0.8  # Likely an official company site
+
+    # .org, .edu → higher reliability
+    if tld in ("org", "edu", "gov"):
+        return 0.8
+
+    # Blog platforms → lower reliability
+    blog_indicators = ("medium.com", "substack.com", "wordpress.com", "blogspot.com",
+                       "zhihu.com", "toutiao.com", "csdn.net")
+    if domain_clean in blog_indicators or any(d in domain_clean for d in blog_indicators):
+        return 0.5
+
+    # Default for unknown URLs
+    return 0.6
 
 
 class CollectorAgent(BaseAgent):
@@ -107,6 +207,14 @@ class CollectorAgent(BaseAgent):
 
         # Convert sources to dicts with IDs for downstream use
         sources = [s.model_dump() for s in validated.sources]
+
+        # Score source reliability based on type and URL
+        for src in sources:
+            src["reliability_score"] = score_source_reliability(
+                source_type=src.get("type", "url"),
+                url=src.get("url"),
+                title=src.get("title", ""),
+            )
 
         return {
             "sources": sources,

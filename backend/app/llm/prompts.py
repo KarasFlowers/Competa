@@ -38,6 +38,8 @@ Rules:
 - content_snippet should contain factual competitive information.
 - For url type, provide a plausible URL.
 - For interview/survey types, simulate realistic user feedback.
+- Prefer official company websites and reputable news sources over blogs or social media.
+- When multiple sources cover the same fact, prefer the one from a more authoritative origin.
 """
 
 
@@ -252,6 +254,7 @@ Rules:
 - Do NOT make claims without evidence.
 - Write in professional analytical tone.
 - executive_summary should highlight key findings.
+- Prefer citing high-reliability sources (official sites, industry reports) over low-reliability ones (blogs, social media).
 
 Report Structure Methodology:
 - Executive Summary: 200-500 chars. Lead with the most impactful finding. Include a competitive positioning statement.

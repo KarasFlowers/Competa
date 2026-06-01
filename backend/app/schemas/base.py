@@ -25,6 +25,7 @@ class Source(BaseModel):
     url: str | None = None
     title: str
     content_snippet: str = ""
+    reliability_score: float = Field(ge=0.0, le=1.0, default=0.5)
     fetched_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 

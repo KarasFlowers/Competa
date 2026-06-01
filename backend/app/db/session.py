@@ -1,5 +1,6 @@
 from collections.abc import AsyncGenerator
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import settings
@@ -18,3 +19,19 @@ async def create_tables() -> None:
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Lightweight migration: add columns that create_all won't add
+        # to existing tables (SQLite limitation).
+        await _migrate_add_columns(conn)
+
+
+async def _migrate_add_columns(conn) -> None:
+    """Add columns that may be missing from existing tables."""
+    migrations = [
+        ("sources", "reliability_score", "FLOAT DEFAULT 0.5"),
+    ]
+    for table, column, col_type in migrations:
+        try:
+            await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"))
+        except Exception:
+            # Column already exists or table doesn't exist — safe to ignore
+            pass

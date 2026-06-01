@@ -37,6 +37,7 @@ class SourceModel(Base):
     url: Mapped[str | None] = mapped_column(Text, nullable=True)
     title: Mapped[str] = mapped_column(String(512), default="")
     content_snippet: Mapped[str] = mapped_column(Text, default="")
+    reliability_score: Mapped[float] = mapped_column(Float, default=0.5)
     fetched_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
