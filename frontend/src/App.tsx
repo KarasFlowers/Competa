@@ -5,12 +5,14 @@ import TaskCreate from "./pages/TaskCreate";
 import TaskDetail from "./pages/TaskDetail";
 import ReportView from "./pages/ReportView";
 import TraceView from "./pages/TraceView";
+import DemoView from "./pages/DemoView";
 
 function App() {
   return (
     <Routes>
       <Route element={<Layout />}>
         <Route path="/" element={<Landing />} />
+        <Route path="/demos/:scenarioId" element={<DemoView />} />
         <Route path="/tasks/new" element={<TaskCreate />} />
         <Route path="/tasks/:id" element={<TaskDetail />} />
         <Route path="/tasks/:id/report" element={<ReportView />} />

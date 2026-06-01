@@ -69,6 +69,7 @@ export interface Source {
   url: string | null;
   title: string;
   content_snippet: string;
+  reliability_score?: number;
   fetched_at: string;
 }
 
@@ -151,6 +152,53 @@ export const metricsApi = {
 
 export const traceApi = {
   list: (taskId: string) => api.get<Trace[]>(`/tasks/${taskId}/traces`),
+};
+
+export interface DemoScenarioSummary {
+  id: string;
+  name: string;
+  description: string;
+  industry: string;
+  target_product: string;
+  competitors: { name: string; category: string; website?: string }[];
+  focus_areas: string[];
+}
+
+export interface DemoSource {
+  id: string;
+  type: string;
+  url: string | null;
+  title: string;
+  content_snippet: string;
+  reliability_score: number;
+}
+
+export interface DemoTrace {
+  agent_name: string;
+  events: Record<string, unknown>[];
+  total_duration: number | null;
+  total_tokens: number | null;
+  status: string;
+}
+
+export interface DemoMetrics {
+  source_count: number;
+  claim_count: number;
+  evidence_coverage_rate: number;
+  manual_correction_count: number;
+}
+
+export interface DemoScenarioDetail extends DemoScenarioSummary {
+  our_product_notes: string;
+  sources: DemoSource[];
+  report: ReportContent;
+  traces: DemoTrace[];
+  metrics: DemoMetrics;
+}
+
+export const demoApi = {
+  list: () => api.get<DemoScenarioSummary[]>("/demos"),
+  get: (id: string) => api.get<DemoScenarioDetail>(`/demos/${id}`),
 };
 
 export const healthApi = {

@@ -11,6 +11,7 @@ import {
 } from "../api/client";
 import { Edit3, Download } from "lucide-react";
 import { useToast } from "../components/Toast";
+import { ReliabilityBadge } from "../components/ReliabilityBadge";
 
 export default function ReportView() {
   const { id } = useParams<{ id: string }>();
@@ -132,14 +133,17 @@ export default function ReportView() {
           <h2 className="text-lg font-semibold text-gray-800 mb-3">Sources</h2>
           <ol className="list-decimal list-inside space-y-2">
             {sources.map((s) => (
-              <li key={s.id} className="text-sm">
+              <li key={s.id} className="text-sm flex items-center gap-2">
                 <button
                   onClick={() => setSelectedSource(s)}
                   className="text-blue-600 hover:underline"
                 >
                   {s.title || s.url || s.id}
                 </button>
-                <span className="ml-2 text-gray-400 text-xs">[{s.type}]</span>
+                <span className="text-gray-400 text-xs">[{s.type}]</span>
+                {s.reliability_score !== undefined && (
+                  <ReliabilityBadge score={s.reliability_score} />
+                )}
               </li>
             ))}
           </ol>
@@ -297,6 +301,13 @@ function SourceModal({ source, onClose }: { source: Source; onClose: () => void 
                 </a>
               </div>
             )}
+            {source.reliability_score !== undefined && (
+              <div className="flex items-center gap-2">
+                <span className="font-medium text-gray-600">Reliability:</span>{" "}
+                <ReliabilityBadge score={source.reliability_score} />
+                <span className="text-gray-500 text-xs">({(source.reliability_score * 100).toFixed(0)}%)</span>
+              </div>
+            )}
             <div>
               <span className="font-medium text-gray-600">Fetched:</span>{" "}
               {new Date(source.fetched_at).toLocaleString()}
@@ -315,3 +326,4 @@ function SourceModal({ source, onClose }: { source: Source; onClose: () => void 
     </div>
   );
 }
+
