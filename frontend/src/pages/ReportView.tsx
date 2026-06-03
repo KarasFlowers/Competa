@@ -12,12 +12,15 @@ import {
 import { Edit3, Download } from "lucide-react";
 import { useToast } from "../components/Toast";
 import { ReliabilityBadge } from "../components/ReliabilityBadge";
+import SourceTracePanel from "../components/SourceTracePanel";
 
 export default function ReportView() {
   const { id } = useParams<{ id: string }>();
   const [report, setReport] = useState<Report | null>(null);
   const [sources, setSources] = useState<Source[]>([]);
   const [selectedSource, setSelectedSource] = useState<Source | null>(null);
+  const [highlightedSourceId, setHighlightedSourceId] = useState<string | null>(null);
+  const [tracePanelOpen, setTracePanelOpen] = useState(false);
   const [error, setError] = useState("");
   const [editingClaim, setEditingClaim] = useState<Claim | null>(null);
   const [editedContent, setEditedContent] = useState("");
@@ -63,7 +66,16 @@ export default function ReportView() {
 
   const handleCiteClick = (sourceId: string) => {
     const src = sourceMap.get(sourceId);
-    if (src) setSelectedSource(src);
+    if (src) {
+      setSelectedSource(src);
+      setTracePanelOpen(true);
+      setHighlightedSourceId(sourceId);
+      // Scroll to source in the list
+      setTimeout(() => {
+        const el = document.getElementById(`source-${sourceId}`);
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+      }, 100);
+    }
   };
 
   if (error) return <div className="p-8 text-red-600">{error}</div>;
@@ -71,8 +83,18 @@ export default function ReportView() {
 
   const content = report.content;
 
+  // Collect all claims for reverse index in trace panel
+  const allClaims: Claim[] = [];
+  const collectClaims = (sections: ReportSection[]) => {
+    for (const s of sections) {
+      if (s.claims) allClaims.push(...s.claims);
+      if (s.subsections) collectClaims(s.subsections);
+    }
+  };
+  if (content.sections) collectClaims(content.sections);
+
   return (
-    <div className="max-w-4xl mx-auto p-6 space-y-6">
+    <div className={`max-w-4xl mx-auto p-6 space-y-6 ${tracePanelOpen ? "mr-96" : ""} transition-all duration-300`}>
       {/* Back link */}
       <Link to={`/tasks/${id}`} className="text-blue-600 hover:underline text-sm">
         &larr; Back to task
@@ -132,11 +154,16 @@ export default function ReportView() {
         <section className="border-t border-gray-200 pt-6">
           <h2 className="text-lg font-semibold text-gray-800 mb-3">Sources</h2>
           <ol className="list-decimal list-inside space-y-2">
-            {sources.map((s) => (
-              <li key={s.id} className="text-sm flex items-center gap-2">
+            {sources.map((s, idx) => (
+              <li
+                key={s.id}
+                id={`source-${s.id}`}
+                className={`text-sm flex items-center gap-2 p-2 rounded-lg transition-colors ${highlightedSourceId === s.id ? "bg-blue-50 border border-blue-200" : ""}`}
+              >
+                <span className="text-xs font-mono text-gray-400 mr-1">[{idx + 1}]</span>
                 <button
-                  onClick={() => setSelectedSource(s)}
-                  className="text-blue-600 hover:underline"
+                  onClick={() => handleCiteClick(s.id)}
+                  className="text-blue-600 hover:underline text-left"
                 >
                   {s.title || s.url || s.id}
                 </button>
@@ -150,8 +177,8 @@ export default function ReportView() {
         </section>
       )}
 
-      {/* Source Detail Modal */}
-      {selectedSource && (
+      {/* Source Detail Modal (legacy, kept for non-trace clicks) */}
+      {selectedSource && !tracePanelOpen && (
         <SourceModal source={selectedSource} onClose={() => setSelectedSource(null)} />
       )}
 
@@ -189,6 +216,18 @@ export default function ReportView() {
             </form>
           </div>
         </div>
+      )}
+
+      {/* Source Trace Panel (slide-in sidebar) */}
+      {tracePanelOpen && selectedSource && (
+        <SourceTracePanel
+          source={selectedSource}
+          claims={allClaims}
+          onClose={() => {
+            setTracePanelOpen(false);
+            setHighlightedSourceId(null);
+          }}
+        />
       )}
     </div>
   );
@@ -241,8 +280,24 @@ function ClaimBlock({
 }) {
   return (
     <li className="bg-gray-50 border border-gray-200 rounded-lg p-3 group relative pr-10">
-      <p className="text-gray-800 text-sm">{claim.content}</p>
-      
+      <p className="text-gray-800 text-sm">
+        {claim.content}
+        {claim.evidence_ids && claim.evidence_ids.length > 0 && (
+          <span className="inline-flex gap-0.5 ml-1">
+            {claim.evidence_ids.map((eid) => (
+              <button
+                key={eid}
+                onClick={() => onCiteClick(eid)}
+                className="text-[11px] text-blue-600 hover:text-blue-800 hover:underline font-medium align-super"
+                title={`溯源: ${eid}`}
+              >
+                [{eid.slice(0, 6)}]
+              </button>
+            ))}
+          </span>
+        )}
+      </p>
+
       {claim.id && (
         <button
           onClick={() => onEditClaim(claim)}
@@ -251,20 +306,6 @@ function ClaimBlock({
         >
           <Edit3 className="w-4 h-4" />
         </button>
-      )}
-      {claim.evidence_ids && claim.evidence_ids.length > 0 && (
-        <div className="flex gap-1 mt-2">
-          {claim.evidence_ids.map((eid) => (
-            <button
-              key={eid}
-              onClick={() => onCiteClick(eid)}
-              className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded hover:bg-blue-200 transition"
-              title={`Source: ${eid}`}
-            >
-              [{eid.slice(0, 6)}]
-            </button>
-          ))}
-        </div>
       )}
       {claim.confidence !== undefined && (
         <span className="text-xs text-gray-400 mt-1 block">

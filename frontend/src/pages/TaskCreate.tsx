@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Plus, X, ChevronDown, ChevronUp } from "lucide-react";
 import { taskApi, type CompetitorInput } from "../api/client";
+import { useToast } from "../components/Toast";
 
 interface CompetitorForm {
   name: string;
@@ -21,6 +22,7 @@ const emptyCompetitor = (): CompetitorForm => ({
 
 export default function TaskCreate() {
   const navigate = useNavigate();
+  const { toast } = useToast();
   const [industry, setIndustry] = useState("");
   const [targetProduct, setTargetProduct] = useState("");
   const [ourProductNotes, setOurProductNotes] = useState("");
@@ -55,7 +57,7 @@ export default function TaskCreate() {
       });
       navigate(`/tasks/${resp.data.id}`);
     } catch {
-      alert("创建失败，请重试");
+      toast("创建失败，请重试", "error");
     } finally {
       setLoading(false);
     }

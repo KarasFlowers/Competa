@@ -6,6 +6,8 @@ import TaskDetail from "./pages/TaskDetail";
 import ReportView from "./pages/ReportView";
 import TraceView from "./pages/TraceView";
 import DemoView from "./pages/DemoView";
+import SurveyView from "./pages/SurveyView";
+import InterviewView from "./pages/InterviewView";
 
 function App() {
   return (
@@ -17,6 +19,8 @@ function App() {
         <Route path="/tasks/:id" element={<TaskDetail />} />
         <Route path="/tasks/:id/report" element={<ReportView />} />
         <Route path="/tasks/:id/traces" element={<TraceView />} />
+        <Route path="/tasks/:id/survey" element={<SurveyView />} />
+        <Route path="/tasks/:id/interview" element={<InterviewView />} />
       </Route>
     </Routes>
   );

@@ -2,10 +2,13 @@ import { useEffect, useState, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
 import { taskApi, metricsApi, type Task, type Metrics, type SSEEvent } from "../api/client";
 import { useToast } from "../components/Toast";
-import { Activity, Plus, RefreshCw } from "lucide-react";
+import { Activity, Plus, RefreshCw, ClipboardList, MessageSquareText } from "lucide-react";
+import DagView from "../components/DagView";
 
 const ACTIVE_STATUSES = new Set([
   "collecting",
+  "surveying",
+  "interviewing",
   "analyzing",
   "writing",
   "filtering",
@@ -16,6 +19,8 @@ const ACTIVE_STATUSES = new Set([
 const STATUS_COLORS: Record<string, string> = {
   pending: "bg-gray-100 text-gray-700",
   collecting: "bg-blue-100 text-blue-700",
+  surveying: "bg-cyan-100 text-cyan-700",
+  interviewing: "bg-teal-100 text-teal-700",
   analyzing: "bg-indigo-100 text-indigo-700",
   writing: "bg-purple-100 text-purple-700",
   filtering: "bg-yellow-100 text-yellow-700",
@@ -199,6 +204,20 @@ export default function TaskDetail() {
               <Activity className="w-4 h-4" />
               执行追踪
             </Link>
+            <Link
+              to={`/tasks/${id}/survey`}
+              className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 flex items-center gap-2 transition"
+            >
+              <ClipboardList className="w-4 h-4" />
+              问卷
+            </Link>
+            <Link
+              to={`/tasks/${id}/interview`}
+              className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 flex items-center gap-2 transition"
+            >
+              <MessageSquareText className="w-4 h-4" />
+              访谈提纲
+            </Link>
             <button
               onClick={() => setShowSourceModal(true)}
               className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 flex items-center gap-2 transition"
@@ -264,6 +283,13 @@ export default function TaskDetail() {
             <span className="animate-spin inline-block w-5 h-5 border-2 border-current border-t-transparent rounded-full" />
             分析进行中...
           </div>
+
+          {/* DAG Progress */}
+          {id && (
+            <div className="rounded-lg border bg-gray-50 p-2">
+              <DagView taskId={id} height="220px" />
+            </div>
+          )}
           
           {sseEvent && (
             <div className="bg-gray-50 p-4 rounded-lg border text-sm text-gray-700 space-y-2">

@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { traceApi, Trace } from "../api/client";
-import { ArrowLeft, Clock, Activity, AlertTriangle, CheckCircle, SearchCode, ChevronDown, ChevronRight } from "lucide-react";
+import { ArrowLeft, Clock, Activity, SearchCode, ChevronDown, ChevronRight } from "lucide-react";
+import DagView from "../components/DagView";
 
 export default function TraceView() {
   const { id } = useParams<{ id: string }>();
@@ -79,38 +80,17 @@ export default function TraceView() {
         </div>
       </div>
 
-      {/* DAG Visualization (Simplified) */}
-      <div className="bg-white rounded-xl shadow-sm border p-6 overflow-x-auto">
+      {/* DAG Visualization */}
+      <div className="bg-white rounded-xl shadow-sm border p-6">
         <h3 className="text-sm font-semibold text-gray-900 mb-4">执行链路图 (DAG)</h3>
-        <div className="flex items-center gap-2 min-w-max pb-2">
-          {["collector", "analyst", "writer", "filter", "qa"].map((agent, i) => {
-            // Check if agent was executed based on events
-            const wasExecuted = trace.events.some((e) => e.agent_name === agent);
-            const hasError = trace.events.some((e) => e.agent_name === agent && e.event_type === "error");
-            const isRetry = trace.events.some((e) => e.agent_name === agent && (e.retry_attempt || 0) > 1);
-
-            let bg = "bg-gray-100 text-gray-400";
-            let border = "border-transparent";
-            if (hasError) { bg = "bg-red-50 text-red-700"; border = "border-red-200"; }
-            else if (wasExecuted) { bg = "bg-green-50 text-green-700"; border = "border-green-200"; }
-            
-            return (
-              <div key={agent} className="flex items-center gap-2">
-                {i > 0 && <div className="h-0.5 w-8 bg-gray-200" />}
-                <div className={`px-4 py-2 rounded-lg border text-sm font-medium ${bg} ${border} relative flex items-center gap-2`}>
-                  {hasError && <AlertTriangle className="w-4 h-4" />}
-                  {wasExecuted && !hasError && <CheckCircle className="w-4 h-4" />}
-                  {agent}
-                  {isRetry && (
-                    <span className="absolute -top-2 -right-2 bg-amber-100 text-amber-700 text-xs px-1.5 py-0.5 rounded-full border border-amber-200">
-                      R
-                    </span>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        {id && <DagView taskId={id} height="280px" onNodeClick={(nodeId) => {
+          // Scroll to and expand the first event for this agent in the timeline
+          const eventIdx = trace?.events.findIndex((e) => e.agent_name === nodeId);
+          if (eventIdx !== undefined && eventIdx >= 0) {
+            const eventId = trace.events[eventIdx].id || `event-${eventIdx}`;
+            setExpandedEvents((prev) => new Set(prev).add(eventId));
+          }
+        }} />}
       </div>
 
       {/* Timeline */}

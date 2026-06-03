@@ -201,6 +201,76 @@ export const demoApi = {
   get: (id: string) => api.get<DemoScenarioDetail>(`/demos/${id}`),
 };
 
+export interface DagNode {
+  id: string;
+  label: string;
+  type: string; // "agent" | "tool"
+  status: string; // "pending" | "running" | "completed" | "failed"
+}
+
+export interface DagEdge {
+  source: string;
+  target: string;
+  label?: string | null;
+}
+
+export interface DagStructure {
+  nodes: DagNode[];
+  edges: DagEdge[];
+}
+
+export const dagApi = {
+  get: (taskId: string) => api.get<DagStructure>(`/tasks/${taskId}/dag`),
+};
+
+// ---------------------------------------------------------------------------
+// Survey & Interview
+// ---------------------------------------------------------------------------
+
+export interface SurveyQuestion {
+  id: string;
+  type: string; // "single_choice" | "multiple_choice" | "likert_scale" | "open_ended" | "ranking"
+  text: string;
+  options: string[];
+  target_persona: string;
+  dimension: string;
+}
+
+export interface SurveyData {
+  title: string;
+  description: string;
+  questions: SurveyQuestion[];
+  target_audience: string;
+  estimated_duration_min: number;
+}
+
+export interface InterviewQuestion {
+  id: string;
+  phase: string; // "opening" | "core" | "probing" | "closing"
+  text: string;
+  follow_ups: string[];
+  target_persona: string;
+  dimension: string;
+}
+
+export interface InterviewData {
+  title: string;
+  target_persona: string;
+  opening_script: string;
+  questions: InterviewQuestion[];
+  closing_script: string;
+  estimated_duration_min: number;
+  notes: string;
+}
+
+export const surveyApi = {
+  get: (taskId: string) => api.get<SurveyData>(`/tasks/${taskId}/survey`),
+};
+
+export const interviewApi = {
+  get: (taskId: string) => api.get<InterviewData>(`/tasks/${taskId}/interview`),
+};
+
 export const healthApi = {
   check: () => api.get<{ status: string }>("/health"),
 };

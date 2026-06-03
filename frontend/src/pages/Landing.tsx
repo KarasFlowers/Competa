@@ -236,8 +236,8 @@ export default function Landing() {
                         </span>
                       ))}
                     </div>
-                    <div className="pt-2 text-blue-600 text-sm font-medium group-hover:underline">
-                      查看完整报告 →
+                    <div className="pt-2 text-blue-600 text-sm font-medium flex items-center group-hover:underline">
+                      查看完整报告 <span className="inline-block transition-transform group-hover:translate-x-1 ml-1">→</span>
                     </div>
                   </div>
                 </Link>
