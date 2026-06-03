@@ -87,3 +87,21 @@ class MetricsModel(Base):
     evidence_coverage_rate: Mapped[float] = mapped_column(Float, default=0.0)
     manual_correction_count: Mapped[int] = mapped_column(Integer, default=0)
     calculated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class SurveyModel(Base):
+    __tablename__ = "surveys"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_gen_id)
+    task_id: Mapped[str] = mapped_column(String(32), index=True)
+    content: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class InterviewModel(Base):
+    __tablename__ = "interviews"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_gen_id)
+    task_id: Mapped[str] = mapped_column(String(32), index=True)
+    content: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

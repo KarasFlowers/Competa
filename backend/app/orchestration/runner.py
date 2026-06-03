@@ -11,9 +11,11 @@ from app.db.session import async_session
 from app.guardrails.redact import safe_error_message
 from app.models.database import (
     ConstraintModel,
+    InterviewModel,
     MetricsModel,
     ReportModel,
     SourceModel,
+    SurveyModel,
     TaskModel,
     TraceModel,
 )
@@ -137,6 +139,24 @@ async def run_pipeline(task_id: str) -> None:
                     reliability_score=src_data.get("reliability_score", 0.5),
                 )
                 session.add(source)
+
+            # Persist survey
+            survey_data = final_state.get("survey", {})
+            if survey_data:
+                survey = SurveyModel(
+                    task_id=task_id,
+                    content=survey_data,
+                )
+                session.add(survey)
+
+            # Persist interview
+            interview_data = final_state.get("interview", {})
+            if interview_data:
+                interview = InterviewModel(
+                    task_id=task_id,
+                    content=interview_data,
+                )
+                session.add(interview)
 
             # Persist report
             report_data = final_state.get("report", {})

@@ -13,10 +13,13 @@ from langgraph.graph import END, StateGraph
 
 from app.agents.analyst import AnalystAgent
 from app.agents.collector import CollectorAgent
+from app.agents.interview import InterviewAgent
 from app.agents.qa import QAAgent
+from app.agents.survey import SurveyAgent
 from app.agents.writer import WriterAgent
 from app.api.sse import publish_event as _publish_event
 from app.guardrails.report_validator import validate_report_completeness
+from app.guardrails.schema_enforcer import enforce_competitive_schema
 from app.orchestration.state import PipelineState
 from app.schemas.trace import EventType, TraceEvent
 from app.services.screenshot import screenshot_webpages
@@ -36,6 +39,8 @@ MAX_CONSTRAINTS = 10
 
 # Singleton agent instances
 _collector = CollectorAgent()
+_survey = SurveyAgent()
+_interview = InterviewAgent()
 _analyst = AnalystAgent()
 _writer = WriterAgent()
 _qa = QAAgent()
@@ -67,6 +72,65 @@ async def collect_node(state: PipelineState) -> dict:
     existing_traces = state.get("traces", [])
     return {
         "sources": result["sources"],
+        "traces": existing_traces + result["traces"],
+        "status": "surveying",
+    }
+
+
+async def survey_node(state: PipelineState) -> dict:
+    """Run the Survey Agent — design a competitive analysis questionnaire."""
+    task_id = state.get("task_id", "")
+    logger.info("DAG: survey_node starting for task %s", task_id)
+    publish_event(task_id, {"agent": "survey", "status": "running"})
+    task = state.get("task", {})
+
+    result = await _survey.run({
+        "target_product": task.get("target_product", ""),
+        "competitors": task.get("competitors", []),
+        "industry": task.get("industry", ""),
+        "focus_areas": task.get("focus_areas"),
+    })
+
+    llm_info = result.get("_llm_response", {})
+    publish_event(task_id, {
+        "agent": "survey", "status": "completed",
+        "duration": llm_info.get("duration"),
+        "tokens": (llm_info.get("input_tokens", 0) or 0) + (llm_info.get("output_tokens", 0) or 0),
+    })
+    existing_traces = state.get("traces", [])
+    return {
+        "survey": result["survey"],
+        "traces": existing_traces + result["traces"],
+        "status": "interviewing",
+    }
+
+
+async def interview_node(state: PipelineState) -> dict:
+    """Run the Interview Agent — design a semi-structured interview guide."""
+    task_id = state.get("task_id", "")
+    logger.info("DAG: interview_node starting for task %s", task_id)
+    publish_event(task_id, {"agent": "interview", "status": "running"})
+    task = state.get("task", {})
+
+    # Pass personas from analysis if available (for targeted interview questions)
+    personas = state.get("analysis", {}).get("personas", [])
+
+    result = await _interview.run({
+        "target_product": task.get("target_product", ""),
+        "competitors": task.get("competitors", []),
+        "industry": task.get("industry", ""),
+        "personas": personas if personas else None,
+    })
+
+    llm_info = result.get("_llm_response", {})
+    publish_event(task_id, {
+        "agent": "interview", "status": "completed",
+        "duration": llm_info.get("duration"),
+        "tokens": (llm_info.get("input_tokens", 0) or 0) + (llm_info.get("output_tokens", 0) or 0),
+    })
+    existing_traces = state.get("traces", [])
+    return {
+        "interview": result["interview"],
         "traces": existing_traces + result["traces"],
         "status": "analyzing",
     }
@@ -123,7 +187,7 @@ async def write_node(state: PipelineState) -> dict:
     return {
         "report": result["report"],
         "traces": existing_traces + result["traces"],
-        "status": "filtering",
+        "status": "screenshotting",
     }
 
 
@@ -192,7 +256,7 @@ async def screenshot_node(state: PipelineState) -> dict:
     return {
         "screenshot_paths": screenshot_results,
         "traces": existing_traces + [trace.model_dump()],
-        "status": "filter",
+        "status": "filtering",
     }
 
 
@@ -239,9 +303,20 @@ async def qa_node(state: PipelineState) -> dict:
     hard_issues = validate_report_completeness(report, sources)
     if hard_issues:
         logger.info(
-            "DAG: qa_node hard validation found %d issue(s) for task %s",
+            "DAG: qa_node report validation found %d issue(s) for task %s",
             len(hard_issues), task_id,
         )
+
+    # --- Competitive knowledge schema enforcement ---
+    analysis = state.get("analysis", {})
+    competitors = state.get("task", {}).get("competitors", [])
+    schema_issues = enforce_competitive_schema(analysis, competitors)
+    if schema_issues:
+        logger.info(
+            "DAG: qa_node schema enforcement found %d issue(s) for task %s",
+            len(schema_issues), task_id,
+        )
+        hard_issues.extend(schema_issues)
 
     # --- LLM-based soft QA check ---
     result = await _qa.run({
@@ -350,6 +425,8 @@ def build_graph() -> StateGraph:
     graph = StateGraph(PipelineState)
 
     graph.add_node("collect", collect_node)
+    graph.add_node("survey", survey_node)
+    graph.add_node("interview", interview_node)
     graph.add_node("analyze", analyze_node)
     graph.add_node("write", write_node)
     graph.add_node("screenshot", screenshot_node)
@@ -357,7 +434,9 @@ def build_graph() -> StateGraph:
     graph.add_node("qa", qa_node)
 
     graph.set_entry_point("collect")
-    graph.add_edge("collect", "analyze")
+    graph.add_edge("collect", "survey")
+    graph.add_edge("survey", "interview")
+    graph.add_edge("interview", "analyze")
     graph.add_edge("analyze", "write")
     graph.add_edge("write", "screenshot")
     graph.add_edge("screenshot", "filter")

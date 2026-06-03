@@ -11,12 +11,35 @@ from app.agents.base import BaseAgent
 from app.llm.prompts import WRITER_SYSTEM, build_writer_prompt
 
 
+class ClaimOutput(BaseModel):
+    """Structured claim with mandatory content and optional evidence linkage."""
+
+    id: str = ""
+    content: str
+    evidence_ids: list[str] = Field(default_factory=list)
+    confidence: float = 0.5
+    category: str = ""
+
+
+class ReportSectionOutput(BaseModel):
+    """Structured report section with nested claims and subsections."""
+
+    title: str
+    content: str = ""
+    claims: list[ClaimOutput] = Field(default_factory=list)
+    subsections: list["ReportSectionOutput"] = Field(default_factory=list)
+
+
+# Allow recursive model
+ReportSectionOutput.model_rebuild()
+
+
 class WriterReportOutput(BaseModel):
     """Schema for Writer LLM output (without task_id/generated_at which are added later)."""
 
     title: str
     executive_summary: str = ""
-    sections: list[dict] = Field(default_factory=list)
+    sections: list[ReportSectionOutput] = Field(default_factory=list)
 
 
 class WriterAgent(BaseAgent):

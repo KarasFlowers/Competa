@@ -319,3 +319,124 @@ def build_qa_prompt(report_json: str, sources_json: str) -> str:
         f"AVAILABLE SOURCES:\n{sources_json}\n\n"
         f"Check completeness, evidence coverage, and schema compliance."
     )
+
+
+# ---------------------------------------------------------------------------
+# Survey Agent
+# ---------------------------------------------------------------------------
+
+SURVEY_SYSTEM = """\
+You are a survey design expert specializing in competitive analysis research.
+Your job is to design structured questionnaires that gather user perceptions
+about products and their competitors.
+
+You MUST output valid JSON matching this schema:
+{
+  "title": "string (descriptive survey title)",
+  "description": "string (brief purpose of the survey)",
+  "questions": [
+    {
+      "id": "string (e.g. q1, q2)",
+      "type": "single_choice" | "multiple_choice" | "likert_scale" | "open_ended" | "ranking",
+      "text": "string (the question text)",
+      "options": ["string"] (for choice/likert/ranking types, empty for open_ended),
+      "target_persona": "string (which persona this question targets)",
+      "dimension": "string (feature|pricing|ux|support|integration|other)"
+    }
+  ],
+  "target_audience": "string (description of who should take this survey)",
+  "estimated_duration_min": number
+}
+
+Rules:
+- Generate 10-15 questions covering: feature preferences, pricing sensitivity, UX satisfaction, support quality, and switching intent.
+- Use a mix of question types: at least 3 multiple_choice, 3 likert_scale, 2 open_ended, 1 ranking.
+- Each question must have a unique id (q1, q2, ...).
+- For likert_scale, options should be: ["Strongly Disagree", "Disagree", "Neutral", "Agree", "Strongly Agree"].
+- For ranking questions, options list the items to rank.
+- Target personas should match the competitive context (e.g. "Enterprise Decision Maker", "Individual Developer").
+- Questions should directly inform competitive positioning decisions.
+- estimated_duration_min should be realistic (typically 5-15 minutes).
+"""
+
+
+def build_survey_prompt(
+    target_product: str,
+    competitors: list[str],
+    industry: str = "",
+    focus_areas: list[str] | None = None,
+) -> str:
+    competitors_str = ", ".join(competitors)
+    focus_str = ", ".join(focus_areas) if focus_areas else "features, pricing, UX, support"
+    return (
+        f"Design a competitive analysis survey questionnaire for '{target_product}' "
+        f"vs competitors [{competitors_str}] in the {industry or 'technology'} industry.\n\n"
+        f"Focus areas: {focus_str}\n\n"
+        f"The survey should help understand user preferences, pain points, and "
+        f"switching behavior between these products."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Interview Agent
+# ---------------------------------------------------------------------------
+
+INTERVIEW_SYSTEM = """\
+You are a user research expert specializing in competitive analysis interviews.
+Your job is to design semi-structured interview guides that probe deep insights
+about user experiences with products and their competitors.
+
+You MUST output valid JSON matching this schema:
+{
+  "title": "string (descriptive interview guide title)",
+  "target_persona": "string (who will be interviewed)",
+  "opening_script": "string (warm-up introduction, 2-3 sentences)",
+  "questions": [
+    {
+      "id": "string (e.g. iq1, iq2)",
+      "phase": "opening" | "core" | "probing" | "closing",
+      "text": "string (the interview question)",
+      "follow_ups": ["string"] (probing follow-up questions if the initial answer is shallow),
+      "target_persona": "string",
+      "dimension": "string (feature|pricing|ux|support|integration|switching|other)"
+    }
+  ],
+  "closing_script": "string (wrap-up and thanks, 2-3 sentences)",
+  "estimated_duration_min": number,
+  "notes": "string (tips for the interviewer)"
+}
+
+Rules:
+- Generate 8-12 questions: 1-2 opening (rapport-building), 5-7 core (deep exploration), 2-3 probing (follow-up depth), 1 closing.
+- Each question must have a unique id (iq1, iq2, ...).
+- Every core question must have at least 1 follow_up for probing deeper.
+- Focus on uncovering: decision-making process, pain points, switching triggers, feature priorities, and unmet needs.
+- Questions should be open-ended and non-leading.
+- The opening_script should put the interviewee at ease.
+- The closing_script should thank them and ask if they'd like to add anything.
+- estimated_duration_min should be realistic (typically 20-45 minutes).
+- notes should include tips like "Listen more than you speak" and "Ask for specific examples".
+"""
+
+
+def build_interview_prompt(
+    target_product: str,
+    competitors: list[str],
+    industry: str = "",
+    personas: list[dict] | None = None,
+) -> str:
+    competitors_str = ", ".join(competitors)
+    personas_str = ""
+    if personas:
+        personas_str = "\n\nTarget personas:\n" + "\n".join(
+            f"- {p.get('segment_name', p.get('name', 'Unknown'))}: "
+            f"{p.get('demographics', '')} | Pain: {', '.join(p.get('pain_points', []))}"
+            for p in personas[:3]
+        )
+    return (
+        f"Design a semi-structured interview guide for competitive analysis of "
+        f"'{target_product}' vs competitors [{competitors_str}] "
+        f"in the {industry or 'technology'} industry.{personas_str}\n\n"
+        f"The interview should uncover deep insights about user decision-making, "
+        f"pain points, and competitive switching behavior."
+    )

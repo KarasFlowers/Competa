@@ -312,3 +312,45 @@ class TestCorrections:
             },
         )
         assert resp.status_code == 200
+
+
+class TestDagEndpoint:
+    async def test_get_dag_structure(self, client: AsyncClient):
+        """DAG endpoint should return nodes and edges with correct structure."""
+        resp = await client.post(
+            "/api/tasks",
+            json={"target_product": "DagTest", "competitors": ["CompA"]},
+        )
+        task_id = resp.json()["id"]
+
+        resp = await client.get(f"/api/tasks/{task_id}/dag")
+        assert resp.status_code == 200
+        data = resp.json()
+
+        # Check nodes
+        assert "nodes" in data
+        assert "edges" in data
+        node_ids = {n["id"] for n in data["nodes"]}
+        assert node_ids == {"collect", "analyze", "write", "screenshot", "filter", "qa"}
+
+        # Check node fields
+        for n in data["nodes"]:
+            assert "id" in n
+            assert "label" in n
+            assert "type" in n
+            assert "status" in n
+
+        # Check edges include forward flow + retry edges
+        edge_pairs = {(e["source"], e["target"]) for e in data["edges"]}
+        assert ("collect", "analyze") in edge_pairs
+        assert ("qa", "collect") in edge_pairs
+        assert ("qa", "analyze") in edge_pairs
+        assert ("qa", "write") in edge_pairs
+
+        # Pending task → all nodes pending
+        statuses = {n["id"]: n["status"] for n in data["nodes"]}
+        assert all(s == "pending" for s in statuses.values())
+
+    async def test_get_dag_not_found(self, client: AsyncClient):
+        resp = await client.get("/api/tasks/nonexistent/dag")
+        assert resp.status_code == 404
