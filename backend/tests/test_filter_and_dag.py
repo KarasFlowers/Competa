@@ -2,6 +2,7 @@
 
 import pytest
 
+from app.agents.fieldwork import FieldworkAgent
 from app.orchestration.graph import filter_node, qa_router, MAX_RETRIES
 
 
@@ -98,3 +99,76 @@ class TestQaRouter:
             "retry_count": 0,
         }
         assert qa_router(state) == "write"
+
+
+class TestFieldworkSources:
+    """Fieldwork must fold simulated survey/interview results back into the
+    evidence pool as citable SURVEY/INTERVIEW sources (the closed loop)."""
+
+    def test_build_sources_from_survey_and_interview(self):
+        fieldwork = {
+            "survey_results": [
+                {
+                    "persona": "Team Buyers",
+                    "respondent_count": 150,
+                    "answers": [
+                        {"question_id": "q1", "dimension": "pricing", "answer": "60% want cheaper tier"},
+                    ],
+                    "key_findings": ["Price sensitivity is high"],
+                },
+            ],
+            "interview_transcripts": [
+                {
+                    "persona": "Power Users",
+                    "excerpts": [
+                        {"question_id": "iq1", "dimension": "switching", "quote": "Lock-in keeps us.", "insight": "Switching cost moat"},
+                    ],
+                    "key_findings": ["Databases create lock-in"],
+                },
+            ],
+            "summary": "synthetic",
+        }
+        sources = FieldworkAgent._build_sources(fieldwork)
+        assert len(sources) == 2
+
+        survey_src = next(s for s in sources if s["type"] == "survey")
+        interview_src = next(s for s in sources if s["type"] == "interview")
+
+        # Flagged as simulated, carry an ID for citation linking, scored as primary research
+        assert survey_src["title"].startswith("[模拟]")
+        assert interview_src["title"].startswith("[模拟]")
+        assert survey_src["id"] and interview_src["id"]
+        assert "Price sensitivity" in survey_src["content_snippet"]
+        assert "Lock-in keeps us" in interview_src["content_snippet"]
+        assert 0 < survey_src["reliability_score"] <= 0.6
+
+    def test_build_sources_empty(self):
+        assert FieldworkAgent._build_sources({}) == []
+
+    @pytest.mark.asyncio
+    async def test_fieldwork_node_merges_sources_into_state(self, monkeypatch):
+        """fieldwork_node must append its sources to existing state sources."""
+        from app.orchestration import graph
+
+        async def fake_run(_input):
+            return {
+                "fieldwork": {"summary": "ok"},
+                "sources": [{"id": "fw1", "type": "survey", "title": "[模拟] S", "content_snippet": "x", "reliability_score": 0.55}],
+                "traces": [],
+                "_llm_response": {"input_tokens": 1, "output_tokens": 1, "duration": 0.1},
+            }
+
+        monkeypatch.setattr(graph._fieldwork, "run", fake_run)
+        state = {
+            "task_id": "t1",
+            "task": {"target_product": "P", "competitors": ["A"]},
+            "sources": [{"id": "web1", "type": "url", "title": "Web"}],
+            "survey": {"questions": []},
+            "interview": {"questions": []},
+            "analysis": {},
+            "traces": [],
+        }
+        result = await graph.fieldwork_node(state)
+        ids = {s["id"] for s in result["sources"]}
+        assert ids == {"web1", "fw1"}
+        assert result["status"] == "analyzing"

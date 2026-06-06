@@ -31,6 +31,9 @@ const features = [
 // ---------------------------------------------------------------------------
 const SIM_STEPS = [
   { agent: "Collector", color: "bg-blue-500", desc: "搜索并采集竞品公开信息", tokens: 2350, duration: "3.1s" },
+  { agent: "Survey", color: "bg-cyan-500", desc: "设计竞品分析问卷", tokens: 1800, duration: "2.2s" },
+  { agent: "Interview", color: "bg-teal-500", desc: "设计半结构化用户访谈提纲", tokens: 1500, duration: "1.8s" },
+  { agent: "Fieldwork", color: "bg-emerald-500", desc: "模拟执行问卷与访谈，回流为可溯源证据", tokens: 2100, duration: "2.5s" },
   { agent: "Analyst", color: "bg-purple-500", desc: "提取功能对比、定价、SWOT 结构化洞察", tokens: 3180, duration: "2.8s" },
   { agent: "Writer", color: "bg-green-500", desc: "生成含引用的结构化竞品分析报告", tokens: 4560, duration: "4.2s" },
   { agent: "Filter", color: "bg-yellow-500", desc: "过滤无证据支撑的声明", tokens: 120, duration: "0.3s" },

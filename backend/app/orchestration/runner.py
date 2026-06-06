@@ -10,6 +10,7 @@ from fastapi.encoders import jsonable_encoder
 from app.db.session import async_session
 from app.guardrails.redact import safe_error_message
 from app.models.database import (
+    AnalysisModel,
     ConstraintModel,
     InterviewModel,
     MetricsModel,
@@ -102,6 +103,8 @@ async def run_pipeline(task_id: str) -> None:
                     "our_product_notes": task.our_product_notes or "",
                 },
                 "sources": existing_sources,
+                "survey": {},
+                "interview": {},
                 "analysis": {},
                 "report": {},
                 "qa_feedback": {},
@@ -113,6 +116,7 @@ async def run_pipeline(task_id: str) -> None:
                 "error": "",
                 "retry_count": 0,
                 "constraints": existing_constraints,
+                "screenshot_paths": [],
             }
             final_state: PipelineState = dict(initial_state)
 
@@ -157,6 +161,15 @@ async def run_pipeline(task_id: str) -> None:
                     content=interview_data,
                 )
                 session.add(interview)
+
+            # Persist structured analysis (feature trees / pricing / personas / SWOT)
+            analysis_data = final_state.get("analysis", {})
+            if analysis_data:
+                analysis = AnalysisModel(
+                    task_id=task_id,
+                    content=analysis_data,
+                )
+                session.add(analysis)
 
             # Persist report
             report_data = final_state.get("report", {})

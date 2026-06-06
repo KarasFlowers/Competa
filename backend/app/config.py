@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     TAVILY_API_KEY: str = ""
     SEARCH_MAX_RESULTS: int = 10
     SEARCH_FETCH_CONTENT: bool = True
+    # Respect target sites' robots.txt before fetching pages (compliance)
+    RESPECT_ROBOTS_TXT: bool = True
 
     @property
     def llm_api_keys(self) -> list[str]:

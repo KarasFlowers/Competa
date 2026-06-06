@@ -4,20 +4,24 @@ import {
   taskApi,
   reportApi,
   sourceApi,
+  analysisApi,
   type Report,
   type Source,
   type ReportSection,
   type Claim,
+  type AnalysisData,
 } from "../api/client";
 import { Edit3, Download } from "lucide-react";
 import { useToast } from "../components/Toast";
 import { ReliabilityBadge } from "../components/ReliabilityBadge";
 import SourceTracePanel from "../components/SourceTracePanel";
+import ComparisonMatrix from "../components/ComparisonMatrix";
 
 export default function ReportView() {
   const { id } = useParams<{ id: string }>();
   const [report, setReport] = useState<Report | null>(null);
   const [sources, setSources] = useState<Source[]>([]);
+  const [analysis, setAnalysis] = useState<AnalysisData | null>(null);
   const [selectedSource, setSelectedSource] = useState<Source | null>(null);
   const [highlightedSourceId, setHighlightedSourceId] = useState<string | null>(null);
   const [tracePanelOpen, setTracePanelOpen] = useState(false);
@@ -40,6 +44,7 @@ export default function ReportView() {
     if (!id) return;
     refreshReport();
     sourceApi.list(id).then((r) => setSources(r.data)).catch(() => {});
+    analysisApi.get(id).then((r) => setAnalysis(r.data)).catch(() => setAnalysis(null));
   }, [id]);
 
   const handleEditClaim = async (e: React.FormEvent) => {
@@ -63,6 +68,8 @@ export default function ReportView() {
   };
 
   const sourceMap = new Map(sources.map((s) => [s.id, s]));
+
+  const sourceIndexMap = new Map(sources.map((s, i) => [s.id, i + 1]));
 
   const handleCiteClick = (sourceId: string) => {
     const src = sourceMap.get(sourceId);
@@ -135,6 +142,15 @@ export default function ReportView() {
         </section>
       )}
 
+      {/* Comparison Matrix + SWOT (structured analysis) */}
+      {analysis && (
+        <ComparisonMatrix
+          analysis={analysis}
+          onCiteClick={handleCiteClick}
+          sourceIndexMap={sourceIndexMap}
+        />
+      )}
+
       {/* Sections */}
       {content.sections?.map((section, i) => (
         <SectionBlock
@@ -146,6 +162,7 @@ export default function ReportView() {
             setEditingClaim(claim);
             setEditedContent(claim.content);
           }}
+          sourceIndexMap={sourceIndexMap}
         />
       ))}
 
@@ -238,11 +255,13 @@ function SectionBlock({
   depth,
   onCiteClick,
   onEditClaim,
+  sourceIndexMap,
 }: {
   section: ReportSection;
   depth: number;
   onCiteClick: (sourceId: string) => void;
   onEditClaim: (claim: Claim) => void;
+  sourceIndexMap: Map<string, number>;
 }) {
   const HeadingTag = depth === 0 ? "h2" : "h3";
   const headingClass = depth === 0
@@ -258,12 +277,12 @@ function SectionBlock({
       {section.claims && section.claims.length > 0 && (
         <ul className="space-y-2 ml-4">
           {section.claims.map((claim, j) => (
-            <ClaimBlock key={j} claim={claim} onCiteClick={onCiteClick} onEditClaim={onEditClaim} />
+            <ClaimBlock key={j} claim={claim} onCiteClick={onCiteClick} onEditClaim={onEditClaim} sourceIndexMap={sourceIndexMap} />
           ))}
         </ul>
       )}
       {section.subsections?.map((sub, k) => (
-        <SectionBlock key={k} section={sub} depth={depth + 1} onCiteClick={onCiteClick} onEditClaim={onEditClaim} />
+        <SectionBlock key={k} section={sub} depth={depth + 1} onCiteClick={onCiteClick} onEditClaim={onEditClaim} sourceIndexMap={sourceIndexMap} />
       ))}
     </section>
   );
@@ -273,10 +292,12 @@ function ClaimBlock({
   claim,
   onCiteClick,
   onEditClaim,
+  sourceIndexMap,
 }: {
   claim: Claim;
   onCiteClick: (sourceId: string) => void;
   onEditClaim: (claim: Claim) => void;
+  sourceIndexMap: Map<string, number>;
 }) {
   return (
     <li className="bg-gray-50 border border-gray-200 rounded-lg p-3 group relative pr-10">
@@ -291,7 +312,7 @@ function ClaimBlock({
                 className="text-[11px] text-blue-600 hover:text-blue-800 hover:underline font-medium align-super"
                 title={`溯源: ${eid}`}
               >
-                [{eid.slice(0, 6)}]
+                [{sourceIndexMap.get(eid) ?? eid.slice(0, 6)}]
               </button>
             ))}
           </span>

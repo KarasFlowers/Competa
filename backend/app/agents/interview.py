@@ -21,12 +21,12 @@ class InterviewAgent(BaseAgent):
             - target_product: str
             - competitors: list[str]
             - industry: str (optional)
-            - personas: list[dict] (optional, from analysis)
+            - survey_questions: list[dict] (optional, from survey agent)
         """
         target_product = input_data.get("target_product", "")
         competitors = input_data.get("competitors", [])
         industry = input_data.get("industry", "")
-        personas = input_data.get("personas")
+        survey_questions = input_data.get("survey_questions")
 
         # Normalize competitor names
         competitor_names = [
@@ -38,7 +38,7 @@ class InterviewAgent(BaseAgent):
             target_product=target_product,
             competitors=competitor_names,
             industry=industry,
-            personas=personas,
+            survey_questions=survey_questions,
         )
 
         validated, llm_resp, traces = await self.call_and_validate(

@@ -105,3 +105,19 @@ class InterviewModel(Base):
     task_id: Mapped[str] = mapped_column(String(32), index=True)
     content: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class AnalysisModel(Base):
+    """Structured competitive intelligence from the Analyst Agent.
+
+    Stores the full AnalyzeResult (feature_trees / pricing_models / personas /
+    swot_analyses) so the frontend can render the comparison matrix and SWOT
+    quadrants — distinct from the narrative report produced by the Writer.
+    """
+
+    __tablename__ = "analyses"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_gen_id)
+    task_id: Mapped[str] = mapped_column(String(32), index=True)
+    content: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

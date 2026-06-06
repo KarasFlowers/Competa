@@ -169,6 +169,49 @@ def _writer_response() -> str:
     })
 
 
+def _fieldwork_response() -> str:
+    return json.dumps({
+        "survey_results": [
+            {
+                "persona": "Team Collaborators",
+                "respondent_count": 180,
+                "answers": [
+                    {"question_id": "q1", "dimension": "feature", "answer": "68% rank real-time collaboration as the top deciding factor"},
+                    {"question_id": "q2", "dimension": "pricing", "answer": "54% find $8/mo acceptable, 31% want a cheaper team tier"},
+                ],
+                "key_findings": [
+                    "Collaboration features outweigh price for team buyers",
+                    "A mid-tier price gap is an opening for competitors",
+                ],
+            },
+            {
+                "persona": "Power Researchers",
+                "respondent_count": 120,
+                "answers": [
+                    {"question_id": "q3", "dimension": "performance", "answer": "72% cite speed and local-first storage as must-haves"},
+                ],
+                "key_findings": ["Performance and data ownership drive Obsidian preference"],
+            },
+        ],
+        "interview_transcripts": [
+            {
+                "persona": "Team Collaborators",
+                "excerpts": [
+                    {
+                        "question_id": "iq1", "dimension": "switching",
+                        "quote": "We tried moving off Notion but the databases keep us locked in.",
+                        "insight": "Database depth creates switching costs that protect Notion",
+                    },
+                ],
+                "key_findings": ["Notion's databases are a retention moat"],
+            },
+        ],
+        "summary": "Simulated fieldwork confirms collaboration depth retains team users while "
+                   "performance-sensitive researchers favor local-first tools — a mid-tier "
+                   "price gap is the clearest competitive opening.",
+    })
+
+
 def _qa_response(task_id: str) -> str:
     """First QA call returns failed (to demonstrate retry), second returns passed."""
     global _qa_call_counts
@@ -227,6 +270,8 @@ async def call_mock_llm(
     system_msg = messages[0].get("content", "") if messages else ""
     if "collector" in system_msg.lower() or "intelligence collector" in system_msg.lower():
         content = _collector_response()
+    elif "user research operations" in system_msg.lower() or "research fieldwork" in system_msg.lower():
+        content = _fieldwork_response()
     elif "analysis expert" in system_msg.lower() or "competitive analysis" in system_msg.lower():
         content = _analyst_response()
     elif "report writer" in system_msg.lower() or "professional competitive" in system_msg.lower():

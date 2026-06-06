@@ -218,6 +218,10 @@ def reset_search_provider() -> None:
 _BLOCKED_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
 _BLOCKED_SCHEMES = {"file", "ftp"}
 
+# Cache parsed robots.txt rules per host to avoid refetching
+_ROBOTS_CACHE: dict[str, object] = {}
+_ROBOTS_USER_AGENT = "Competa"
+
 
 def _is_url_safe(url: str) -> bool:
     """Reject internal / unsafe URLs to prevent SSRF."""
@@ -236,6 +240,62 @@ def _is_url_safe(url: str) -> bool:
     return True
 
 
+async def _is_fetch_allowed(url: str) -> bool:
+    """Check the target site's robots.txt before fetching (compliance).
+
+    Fails open (returns True) when robots.txt is missing or unreachable —
+    standard crawler behavior. Caches the parser per host. Controlled by the
+    RESPECT_ROBOTS_TXT setting (default on).
+    """
+    if not getattr(settings, "RESPECT_ROBOTS_TXT", True):
+        return True
+
+    from urllib.parse import urlparse
+    from urllib.robotparser import RobotFileParser
+
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return True
+    host = parsed.hostname or ""
+    if not host:
+        return True
+
+    cache_key = f"{parsed.scheme}://{parsed.netloc}"
+    parser = _ROBOTS_CACHE.get(cache_key)
+    if parser is None:
+        parser = RobotFileParser()
+        robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
+        try:
+            async with httpx.AsyncClient(
+                timeout=8.0, follow_redirects=True,
+                headers={"User-Agent": f"{_ROBOTS_USER_AGENT}/0.1"},
+            ) as client:
+                resp = await client.get(robots_url)
+            if resp.status_code >= 400:
+                # No robots.txt (or forbidden) → allowed by convention
+                parser.parse([])
+            else:
+                parser.parse(resp.text.splitlines())
+        except Exception:
+            logger.debug("robots.txt fetch failed for %s; allowing", host, exc_info=True)
+            parser.parse([])
+        _ROBOTS_CACHE[cache_key] = parser
+
+    try:
+        allowed = parser.can_fetch(_ROBOTS_USER_AGENT, url)
+        if not allowed:
+            logger.info("robots.txt disallows fetching %s — skipping", url)
+        return allowed
+    except Exception:
+        return True
+
+
+def reset_robots_cache() -> None:
+    """Clear the robots.txt parser cache — useful for testing."""
+    _ROBOTS_CACHE.clear()
+
+
 async def fetch_webpage(
     url: str,
     *,
@@ -249,6 +309,11 @@ async def fetch_webpage(
     """
     if not _is_url_safe(url):
         raise ValueError(f"URL blocked (internal/unsafe): {url}")
+
+    # Respect the target site's robots.txt before fetching
+    if not await _is_fetch_allowed(url):
+        logger.info("Skipping %s — disallowed by robots.txt", url)
+        return {"url": url, "title": None, "content": None}
 
     try:
         from bs4 import BeautifulSoup

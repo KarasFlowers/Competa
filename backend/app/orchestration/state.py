@@ -11,6 +11,7 @@ class PipelineState(TypedDict, total=False):
     sources: list[dict[str, Any]]
     survey: dict[str, Any]
     interview: dict[str, Any]
+    fieldwork: dict[str, Any]
     analysis: dict[str, Any]
     report: dict[str, Any]
     qa_feedback: dict[str, Any]

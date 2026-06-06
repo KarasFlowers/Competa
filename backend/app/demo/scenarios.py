@@ -167,6 +167,14 @@ AI_ASSISTANT: dict[str, Any] = {
             {"event_type": "start", "agent_name": "collector", "input_summary": "采集豆包/Kimi/DeepSeek/通义千问竞品信息"},
             {"event_type": "output", "agent_name": "collector", "output_summary": "采集 8 条来源，覆盖 4 个竞品", "token_count": 2350, "duration": 3.1},
         ], "total_duration": 3.1, "total_tokens": 2350, "status": "completed"},
+        {"agent_name": "survey", "events": [
+            {"event_type": "start", "agent_name": "survey", "input_summary": "设计竞品分析问卷"},
+            {"event_type": "output", "agent_name": "survey", "output_summary": "生成 12 道问卷题目，覆盖功能/定价/体验维度", "token_count": 1800, "duration": 2.2},
+        ], "total_duration": 2.2, "total_tokens": 1800, "status": "completed"},
+        {"agent_name": "interview", "events": [
+            {"event_type": "start", "agent_name": "interview", "input_summary": "设计用户访谈提纲"},
+            {"event_type": "output", "agent_name": "interview", "output_summary": "生成 8 道访谈问题，含追问策略", "token_count": 1500, "duration": 1.8},
+        ], "total_duration": 1.8, "total_tokens": 1500, "status": "completed"},
         {"agent_name": "analyst", "events": [
             {"event_type": "start", "agent_name": "analyst", "input_summary": "分析采集数据，提取结构化洞察"},
             {"event_type": "output", "agent_name": "analyst", "output_summary": "生成功能对比、SWOT、市场定位分析", "token_count": 3180, "duration": 2.8},
@@ -309,6 +317,14 @@ SHORT_VIDEO: dict[str, Any] = {
             {"event_type": "start", "agent_name": "collector", "input_summary": "采集抖音/快手/小红书/B站竞品信息"},
             {"event_type": "output", "agent_name": "collector", "output_summary": "采集 8 条来源，覆盖 4 个平台", "token_count": 2680, "duration": 3.4},
         ], "total_duration": 3.4, "total_tokens": 2680, "status": "completed"},
+        {"agent_name": "survey", "events": [
+            {"event_type": "start", "agent_name": "survey", "input_summary": "设计短视频平台竞品分析问卷"},
+            {"event_type": "output", "agent_name": "survey", "output_summary": "生成 10 道问卷题目，覆盖内容/商业化/AI维度", "token_count": 1600, "duration": 2.0},
+        ], "total_duration": 2.0, "total_tokens": 1600, "status": "completed"},
+        {"agent_name": "interview", "events": [
+            {"event_type": "start", "agent_name": "interview", "input_summary": "设计用户访谈提纲"},
+            {"event_type": "output", "agent_name": "interview", "output_summary": "生成 7 道访谈问题，含追问策略", "token_count": 1400, "duration": 1.6},
+        ], "total_duration": 1.6, "total_tokens": 1400, "status": "completed"},
         {"agent_name": "analyst", "events": [
             {"event_type": "start", "agent_name": "analyst", "input_summary": "分析采集数据，提取结构化洞察"},
             {"event_type": "output", "agent_name": "analyst", "output_summary": "生成功能对比、SWOT、市场定位分析", "token_count": 3960, "duration": 3.1},
@@ -451,6 +467,14 @@ AI_CODING: dict[str, Any] = {
             {"event_type": "start", "agent_name": "collector", "input_summary": "采集 Cursor/Copilot/TRAE/Windsurf 竞品信息"},
             {"event_type": "output", "agent_name": "collector", "output_summary": "采集 8 条来源，覆盖 4 个工具", "token_count": 2100, "duration": 2.8},
         ], "total_duration": 2.8, "total_tokens": 2100, "status": "completed"},
+        {"agent_name": "survey", "events": [
+            {"event_type": "start", "agent_name": "survey", "input_summary": "设计AI编程工具竞品分析问卷"},
+            {"event_type": "output", "agent_name": "survey", "output_summary": "生成 10 道问卷题目，覆盖补全/Agent/定价维度", "token_count": 1500, "duration": 1.8},
+        ], "total_duration": 1.8, "total_tokens": 1500, "status": "completed"},
+        {"agent_name": "interview", "events": [
+            {"event_type": "start", "agent_name": "interview", "input_summary": "设计开发者访谈提纲"},
+            {"event_type": "output", "agent_name": "interview", "output_summary": "生成 6 道访谈问题，含追问策略", "token_count": 1200, "duration": 1.4},
+        ], "total_duration": 1.4, "total_tokens": 1200, "status": "completed"},
         {"agent_name": "analyst", "events": [
             {"event_type": "start", "agent_name": "analyst", "input_summary": "分析采集数据，提取结构化洞察"},
             {"event_type": "output", "agent_name": "analyst", "output_summary": "生成功能对比、SWOT、定价分析", "token_count": 3500, "duration": 2.5},
@@ -480,6 +504,45 @@ AI_CODING: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
+
+# Structured analysis (feature trees / pricing / personas / SWOT) powering the
+# comparison matrix and SWOT quadrants in the frontend. Kept alongside each
+# scenario's narrative report so demo mode renders the matrix without a pipeline run.
+AI_ASSISTANT["analysis"] = {
+    "feature_trees": [
+        {"product_name": "豆包 (Doubao)", "root_nodes": [
+            {"name": "多模态能力", "description": "文/图/音/视频全模态", "status": "supported", "children": []},
+            {"name": "超长上下文", "description": "128K tokens", "status": "partial", "children": []},
+            {"name": "深度推理", "description": "推理模型能力", "status": "partial", "children": []},
+            {"name": "生态整合", "description": "抖音+飞书+即梦", "status": "supported", "children": []},
+            {"name": "开源模型", "description": "", "status": "missing", "children": []},
+        ]},
+        {"product_name": "Kimi", "root_nodes": [
+            {"name": "多模态能力", "description": "文本+图片", "status": "partial", "children": []},
+            {"name": "超长上下文", "description": "200 万字，业界最长", "status": "supported", "children": []},
+            {"name": "深度推理", "description": "", "status": "partial", "children": []},
+            {"name": "生态整合", "description": "独立应用为主", "status": "missing", "children": []},
+            {"name": "开源模型", "description": "", "status": "missing", "children": []},
+        ]},
+        {"product_name": "DeepSeek", "root_nodes": [
+            {"name": "多模态能力", "description": "文本+图片+代码", "status": "partial", "children": []},
+            {"name": "超长上下文", "description": "128K tokens", "status": "partial", "children": []},
+            {"name": "深度推理", "description": "R1 达 GPT-4 级别", "status": "supported", "children": []},
+            {"name": "生态整合", "description": "开源社区驱动", "status": "partial", "children": []},
+            {"name": "开源模型", "description": "全栈开源", "status": "supported", "children": []},
+        ]},
+        {"product_name": "通义千问", "root_nodes": [
+            {"name": "多模态能力", "description": "文/图/音/视频", "status": "supported", "children": []},
+            {"name": "超长上下文", "description": "128K tokens", "status": "partial", "children": []},
+            {"name": "深度推理", "description": "", "status": "partial", "children": []},
+            {"name": "生态整合", "description": "阿里云+淘宝+钉钉", "status": "supported", "children": []},
+            {"name": "开源模型", "description": "部分开源", "status": "partial", "children": []},
+        ]},
+    ],
+    "pricing_models": [],
+    "personas": [],
+    "swot_analyses": [],
+}
 DEMO_SCENARIOS: list[dict[str, Any]] = [AI_ASSISTANT, SHORT_VIDEO, AI_CODING]
 
 

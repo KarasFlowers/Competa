@@ -265,3 +265,60 @@ class TestFindClaimRecursive:
 
         claim = _find_claim_recursive([], "any")
         assert claim is None
+
+
+class TestRobotsCompliance:
+    """fetch_webpage must honor the target site's robots.txt (compliance)."""
+
+    async def test_disallowed_url_is_skipped(self, monkeypatch):
+        from app.services import search
+
+        search.reset_robots_cache()
+        monkeypatch.setattr(search.settings, "RESPECT_ROBOTS_TXT", True)
+
+        class _Resp:
+            status_code = 200
+            text = "User-agent: *\nDisallow: /private"
+
+        class _Client:
+            def __init__(self, *a, **k): ...
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): return False
+            async def get(self, url): return _Resp()
+
+        monkeypatch.setattr(search.httpx, "AsyncClient", _Client)
+
+        allowed = await search._is_fetch_allowed("https://example.com/private/page")
+        assert allowed is False
+
+        # A path outside the disallow rule is permitted
+        search.reset_robots_cache()
+        allowed_ok = await search._is_fetch_allowed("https://example.com/public/page")
+        assert allowed_ok is True
+
+    async def test_missing_robots_fails_open(self, monkeypatch):
+        from app.services import search
+
+        search.reset_robots_cache()
+        monkeypatch.setattr(search.settings, "RESPECT_ROBOTS_TXT", True)
+
+        class _Resp:
+            status_code = 404
+            text = ""
+
+        class _Client:
+            def __init__(self, *a, **k): ...
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): return False
+            async def get(self, url): return _Resp()
+
+        monkeypatch.setattr(search.httpx, "AsyncClient", _Client)
+        assert await search._is_fetch_allowed("https://example.com/anything") is True
+
+    async def test_disabled_setting_skips_check(self, monkeypatch):
+        from app.services import search
+
+        search.reset_robots_cache()
+        monkeypatch.setattr(search.settings, "RESPECT_ROBOTS_TXT", False)
+        # Should return True without any network call
+        assert await search._is_fetch_allowed("https://example.com/private/x") is True

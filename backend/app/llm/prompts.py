@@ -423,20 +423,118 @@ def build_interview_prompt(
     target_product: str,
     competitors: list[str],
     industry: str = "",
-    personas: list[dict] | None = None,
+    survey_questions: list[dict] | None = None,
 ) -> str:
     competitors_str = ", ".join(competitors)
-    personas_str = ""
-    if personas:
-        personas_str = "\n\nTarget personas:\n" + "\n".join(
-            f"- {p.get('segment_name', p.get('name', 'Unknown'))}: "
-            f"{p.get('demographics', '')} | Pain: {', '.join(p.get('pain_points', []))}"
-            for p in personas[:3]
+    survey_context = ""
+    if survey_questions:
+        q_summary = "\n".join(
+            f"- [{q.get('type', '?')}] {q.get('text', '')} (dimension: {q.get('dimension', 'general')})"
+            for q in survey_questions[:8]
+        )
+        survey_context = (
+            "\n\nA survey questionnaire has already been designed for this analysis. "
+            "Use these survey dimensions and topics to inform your interview questions, "
+            "going deeper into the areas the survey covers at a surface level:\n"
+            + q_summary
         )
     return (
         f"Design a semi-structured interview guide for competitive analysis of "
         f"'{target_product}' vs competitors [{competitors_str}] "
-        f"in the {industry or 'technology'} industry.{personas_str}\n\n"
+        f"in the {industry or 'technology'} industry.{survey_context}\n\n"
         f"The interview should uncover deep insights about user decision-making, "
         f"pain points, and competitive switching behavior."
     )
+
+
+# ---------------------------------------------------------------------------
+# Fieldwork Agent — simulates running the designed survey + interview
+# ---------------------------------------------------------------------------
+
+FIELDWORK_SYSTEM = """\
+You are a user research operations specialist. You are given a survey
+questionnaire and an interview guide that have already been designed, plus the
+target user personas. Your job is to SIMULATE realistic research fieldwork:
+generate plausible aggregate survey results and representative interview
+excerpts, grounded in the personas and the competitive context.
+
+These results are SIMULATED (synthetic) — they model how the described personas
+would likely respond. Keep them realistic, internally consistent, and useful for
+competitive analysis, but never fabricate precise statistics that imply a real
+study (use qualitative ranges like "most", "a minority", approximate percentages).
+
+You MUST output valid JSON matching this schema:
+{
+  "survey_results": [
+    {
+      "persona": "string (which persona segment)",
+      "respondent_count": number (plausible sample size, e.g. 50-300),
+      "answers": [
+        {"question_id": "string (matches a survey question id)", "dimension": "string", "answer": "string (aggregate result, e.g. '62% prefer X, 30% neutral')"}
+      ],
+      "key_findings": ["string (1-3 takeaways from this segment)"]
+    }
+  ],
+  "interview_transcripts": [
+    {
+      "persona": "string",
+      "excerpts": [
+        {"question_id": "string (matches an interview question id)", "dimension": "string", "quote": "string (a realistic verbatim-style quote)", "insight": "string (what this reveals)"}
+      ],
+      "key_findings": ["string (1-3 deep insights)"]
+    }
+  ],
+  "summary": "string (2-3 sentence synthesis of what the fieldwork reveals about the competitive landscape)"
+}
+
+Rules:
+- Cover the main personas provided. If none are provided, infer 1-2 plausible segments.
+- Answer the actual questions: reference their question_id and dimension where possible.
+- Survey answers should be aggregate (percentages/ranges), not single-person responses.
+- Interview excerpts should sound like real users: specific, opinionated, with concrete examples.
+- key_findings must be actionable for competitive positioning.
+- Stay consistent with the personas' stated pain points and needs.
+"""
+
+
+def build_fieldwork_prompt(
+    target_product: str,
+    competitors: list[str],
+    survey: dict | None = None,
+    interview: dict | None = None,
+    personas: list[dict] | None = None,
+) -> str:
+    competitors_str = ", ".join(competitors)
+    parts: list[str] = [
+        f"Simulate research fieldwork for competitive analysis of '{target_product}' "
+        f"vs competitors [{competitors_str}].\n"
+    ]
+
+    if personas:
+        persona_lines = "\n".join(
+            f"- {p.get('segment_name', 'Segment')}: {p.get('demographics', '')} | "
+            f"Pain: {', '.join(p.get('pain_points', [])[:3])} | "
+            f"Needs: {', '.join(p.get('needs', [])[:3])}"
+            for p in personas[:4]
+        )
+        parts.append(f"\nTarget personas:\n{persona_lines}\n")
+
+    if survey and survey.get("questions"):
+        sq = "\n".join(
+            f"- [{q.get('id', '?')}|{q.get('dimension', 'general')}] {q.get('text', '')}"
+            for q in survey["questions"][:12]
+        )
+        parts.append(f"\nSurvey questions to answer (aggregate):\n{sq}\n")
+
+    if interview and interview.get("questions"):
+        iq = "\n".join(
+            f"- [{q.get('id', '?')}|{q.get('dimension', 'general')}] {q.get('text', '')}"
+            for q in interview["questions"][:12]
+        )
+        parts.append(f"\nInterview questions to gather excerpts for:\n{iq}\n")
+
+    parts.append(
+        "\nProduce simulated survey results and interview excerpts that a competitive "
+        "analyst could cite as primary research signals."
+    )
+    return "".join(parts)
