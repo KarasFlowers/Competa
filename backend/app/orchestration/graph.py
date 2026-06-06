@@ -1,6 +1,8 @@
 """LangGraph DAG with QA feedback loop.
 
-Flow: collect → analyze → write → screenshot → filter → qa → (qa_router)
+Flow: collect → survey → interview → fieldwork → analyze → write → screenshot → filter → qa → (qa_router)
+The fieldwork node simulates running the designed survey + interview and folds
+the results back into the evidence pool as SURVEY/INTERVIEW sources.
 qa_router routes to END (pass) or back to collect/analyze/write (fail, up to MAX_RETRIES).
 """
 
@@ -13,6 +15,7 @@ from langgraph.graph import END, StateGraph
 
 from app.agents.analyst import AnalystAgent
 from app.agents.collector import CollectorAgent
+from app.agents.fieldwork import FieldworkAgent
 from app.agents.interview import InterviewAgent
 from app.agents.qa import QAAgent
 from app.agents.survey import SurveyAgent
@@ -41,6 +44,7 @@ MAX_CONSTRAINTS = 10
 _collector = CollectorAgent()
 _survey = SurveyAgent()
 _interview = InterviewAgent()
+_fieldwork = FieldworkAgent()
 _analyst = AnalystAgent()
 _writer = WriterAgent()
 _qa = QAAgent()
@@ -112,14 +116,15 @@ async def interview_node(state: PipelineState) -> dict:
     publish_event(task_id, {"agent": "interview", "status": "running"})
     task = state.get("task", {})
 
-    # Pass personas from analysis if available (for targeted interview questions)
-    personas = state.get("analysis", {}).get("personas", [])
+    # Pass survey data if available (for targeted interview questions informed by survey)
+    survey_data = state.get("survey", {})
+    survey_questions = survey_data.get("questions", []) if survey_data else []
 
     result = await _interview.run({
         "target_product": task.get("target_product", ""),
         "competitors": task.get("competitors", []),
         "industry": task.get("industry", ""),
-        "personas": personas if personas else None,
+        "survey_questions": survey_questions if survey_questions else None,
     })
 
     llm_info = result.get("_llm_response", {})
@@ -131,6 +136,45 @@ async def interview_node(state: PipelineState) -> dict:
     existing_traces = state.get("traces", [])
     return {
         "interview": result["interview"],
+        "traces": existing_traces + result["traces"],
+        "status": "fieldwork",
+    }
+
+
+async def fieldwork_node(state: PipelineState) -> dict:
+    """Run the Fieldwork Agent — simulate the designed survey + interview.
+
+    Produces synthetic-but-realistic research results and folds them back into
+    the evidence pool as SURVEY/INTERVIEW sources, so the Analyst's structured
+    output is grounded in primary-research signals (not just web collection).
+    """
+    task_id = state.get("task_id", "")
+    logger.info("DAG: fieldwork_node starting for task %s", task_id)
+    publish_event(task_id, {"agent": "fieldwork", "status": "running"})
+    task = state.get("task", {})
+
+    result = await _fieldwork.run({
+        "target_product": task.get("target_product", ""),
+        "competitors": task.get("competitors", []),
+        "survey": state.get("survey", {}),
+        "interview": state.get("interview", {}),
+        "personas": state.get("analysis", {}).get("personas", []),
+    })
+
+    new_sources = result.get("sources", [])
+    merged_sources = state.get("sources", []) + new_sources
+
+    llm_info = result.get("_llm_response", {})
+    publish_event(task_id, {
+        "agent": "fieldwork", "status": "completed",
+        "duration": llm_info.get("duration"),
+        "tokens": (llm_info.get("input_tokens", 0) or 0) + (llm_info.get("output_tokens", 0) or 0),
+        "added_sources": len(new_sources),
+    })
+    existing_traces = state.get("traces", [])
+    return {
+        "fieldwork": result["fieldwork"],
+        "sources": merged_sources,
         "traces": existing_traces + result["traces"],
         "status": "analyzing",
     }
@@ -427,6 +471,7 @@ def build_graph() -> StateGraph:
     graph.add_node("collect", collect_node)
     graph.add_node("survey", survey_node)
     graph.add_node("interview", interview_node)
+    graph.add_node("fieldwork", fieldwork_node)
     graph.add_node("analyze", analyze_node)
     graph.add_node("write", write_node)
     graph.add_node("screenshot", screenshot_node)
@@ -436,7 +481,8 @@ def build_graph() -> StateGraph:
     graph.set_entry_point("collect")
     graph.add_edge("collect", "survey")
     graph.add_edge("survey", "interview")
-    graph.add_edge("interview", "analyze")
+    graph.add_edge("interview", "fieldwork")
+    graph.add_edge("fieldwork", "analyze")
     graph.add_edge("analyze", "write")
     graph.add_edge("write", "screenshot")
     graph.add_edge("screenshot", "filter")

@@ -331,7 +331,10 @@ class TestDagEndpoint:
         assert "nodes" in data
         assert "edges" in data
         node_ids = {n["id"] for n in data["nodes"]}
-        assert node_ids == {"collect", "analyze", "write", "screenshot", "filter", "qa"}
+        assert node_ids == {
+            "collector", "survey", "interview", "fieldwork", "analyst",
+            "writer", "screenshot", "filter", "qa",
+        }
 
         # Check node fields
         for n in data["nodes"]:
@@ -342,10 +345,13 @@ class TestDagEndpoint:
 
         # Check edges include forward flow + retry edges
         edge_pairs = {(e["source"], e["target"]) for e in data["edges"]}
-        assert ("collect", "analyze") in edge_pairs
-        assert ("qa", "collect") in edge_pairs
-        assert ("qa", "analyze") in edge_pairs
-        assert ("qa", "write") in edge_pairs
+        assert ("collector", "survey") in edge_pairs
+        assert ("interview", "fieldwork") in edge_pairs
+        assert ("fieldwork", "analyst") in edge_pairs
+        assert ("analyst", "writer") in edge_pairs
+        assert ("qa", "collector") in edge_pairs
+        assert ("qa", "analyst") in edge_pairs
+        assert ("qa", "writer") in edge_pairs
 
         # Pending task → all nodes pending
         statuses = {n["id"]: n["status"] for n in data["nodes"]}

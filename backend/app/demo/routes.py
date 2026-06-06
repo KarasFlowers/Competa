@@ -94,6 +94,7 @@ class DemoScenarioDetail(BaseModel):
     report: DemoReport
     traces: list[DemoTrace]
     metrics: DemoMetrics
+    analysis: dict = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------

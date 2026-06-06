@@ -9,6 +9,8 @@ import {
 } from "../api/client";
 import { ArrowLeft, Clock, FileText, BarChart3, ShieldCheck } from "lucide-react";
 import { ReliabilityBadge } from "../components/ReliabilityBadge";
+import ComparisonMatrix from "../components/ComparisonMatrix";
+import type { AnalysisData } from "../api/client";
 
 export default function DemoView() {
   const { scenarioId } = useParams<{ scenarioId: string }>();
@@ -69,6 +71,9 @@ export default function DemoView() {
           {scenario.traces.map((trace, i) => {
             const agentColors: Record<string, string> = {
               collector: "bg-blue-500",
+              survey: "bg-cyan-500",
+              interview: "bg-teal-500",
+              fieldwork: "bg-emerald-500",
               analyst: "bg-purple-500",
               writer: "bg-green-500",
               filter: "bg-yellow-500",
@@ -99,6 +104,11 @@ export default function DemoView() {
           <h2 className="text-lg font-semibold text-blue-900 mb-2">Executive Summary</h2>
           <p className="text-gray-800 leading-relaxed">{scenario.report.executive_summary}</p>
         </section>
+      )}
+
+      {/* Comparison Matrix + SWOT (structured analysis) */}
+      {scenario.analysis && (
+        <ComparisonMatrix analysis={scenario.analysis as AnalysisData} />
       )}
 
       {/* Report sections */}

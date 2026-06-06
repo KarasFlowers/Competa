@@ -194,6 +194,7 @@ export interface DemoScenarioDetail extends DemoScenarioSummary {
   report: ReportContent;
   traces: DemoTrace[];
   metrics: DemoMetrics;
+  analysis?: AnalysisData;
 }
 
 export const demoApi = {
@@ -269,6 +270,68 @@ export const surveyApi = {
 
 export const interviewApi = {
   get: (taskId: string) => api.get<InterviewData>(`/tasks/${taskId}/interview`),
+};
+
+// ---------------------------------------------------------------------------
+// Structured analysis — feature trees / pricing / personas / SWOT
+// (powers the comparison matrix & SWOT quadrants)
+// ---------------------------------------------------------------------------
+
+export interface FeatureNode {
+  name: string;
+  description?: string;
+  status: string; // "supported" | "partial" | "missing"
+  children?: FeatureNode[];
+}
+
+export interface FeatureTree {
+  product_name: string;
+  root_nodes: FeatureNode[];
+}
+
+export interface PricingTier {
+  name: string;
+  price: number;
+  currency?: string;
+  period?: string;
+  features?: string[];
+  limitations?: string[];
+}
+
+export interface PricingModel {
+  product_name: string;
+  model_type: string;
+  tiers: PricingTier[];
+}
+
+export interface Persona {
+  segment_name: string;
+  demographics?: string;
+  pain_points?: string[];
+  needs?: string[];
+  product_usage_patterns?: string;
+}
+
+export interface SWOTItem {
+  category: string; // "strength" | "weakness" | "opportunity" | "threat"
+  content: string;
+  evidence_ids?: string[];
+}
+
+export interface SWOTAnalysis {
+  product_name: string;
+  items: SWOTItem[];
+}
+
+export interface AnalysisData {
+  feature_trees: FeatureTree[];
+  pricing_models: PricingModel[];
+  personas: Persona[];
+  swot_analyses: SWOTAnalysis[];
+}
+
+export const analysisApi = {
+  get: (taskId: string) => api.get<AnalysisData>(`/tasks/${taskId}/analysis`),
 };
 
 export const healthApi = {

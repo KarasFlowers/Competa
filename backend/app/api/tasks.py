@@ -10,10 +10,13 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app.db.session import get_session
 from app.models.database import (
+    AnalysisModel,
     ConstraintModel,
+    InterviewModel,
     MetricsModel,
     ReportModel,
     SourceModel,
+    SurveyModel,
     TaskModel,
     TraceModel,
 )
@@ -272,6 +275,117 @@ async def submit_correction(
     return CorrectionResponse(message="Correction applied", task_id=task_id)
 
 
+# ---------------------------------------------------------------------------
+# DAG structure endpoint
+# ---------------------------------------------------------------------------
+
+# Static DAG definition — mirrors graph.py build_graph()
+_DAG_NODES = [
+    {"id": "collector", "label": "信息采集", "type": "agent"},
+    {"id": "survey", "label": "问卷设计", "type": "agent"},
+    {"id": "interview", "label": "访谈设计", "type": "agent"},
+    {"id": "fieldwork", "label": "调研执行", "type": "agent"},
+    {"id": "analyst", "label": "分析", "type": "agent"},
+    {"id": "writer", "label": "报告撰写", "type": "agent"},
+    {"id": "screenshot", "label": "截图采集", "type": "tool"},
+    {"id": "filter", "label": "证据过滤", "type": "tool"},
+    {"id": "qa", "label": "质检", "type": "agent"},
+]
+
+_DAG_EDGES = [
+    {"source": "collector", "target": "survey"},
+    {"source": "survey", "target": "interview"},
+    {"source": "interview", "target": "fieldwork"},
+    {"source": "fieldwork", "target": "analyst"},
+    {"source": "analyst", "target": "writer"},
+    {"source": "writer", "target": "screenshot"},
+    {"source": "screenshot", "target": "filter"},
+    {"source": "filter", "target": "qa"},
+    {"source": "qa", "target": "collector", "label": "retry"},
+    {"source": "qa", "target": "analyst", "label": "retry"},
+    {"source": "qa", "target": "writer", "label": "retry"},
+]
+
+# Map task.status to the currently-running DAG node
+_STATUS_TO_RUNNING_NODE = {
+    "collecting": "collector",
+    "surveying": "survey",
+    "interviewing": "interview",
+    "fieldwork": "fieldwork",
+    "analyzing": "analyst",
+    "writing": "writer",
+    "screenshotting": "screenshot",
+    "filtering": "filter",
+    "retrying": "qa",  # retrying means QA just failed
+    "qa": "qa",
+}
+
+
+class DagNodeResponse(BaseModel):
+    id: str
+    label: str
+    type: str  # "agent" | "tool"
+    status: str  # "pending" | "running" | "completed" | "failed"
+
+
+class DagEdgeResponse(BaseModel):
+    source: str
+    target: str
+    label: str | None = None
+
+
+class DagStructureResponse(BaseModel):
+    nodes: list[DagNodeResponse]
+    edges: list[DagEdgeResponse]
+
+
+@router.get("/{task_id}/dag", response_model=DagStructureResponse)
+async def get_task_dag(task_id: str, session: AsyncSession = Depends(get_session)):
+    """Return the DAG structure with node statuses inferred from task state and traces."""
+    task = await session.get(TaskModel, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    # Determine which agents have completed from trace events
+    trace_result = await session.execute(
+        select(TraceModel).where(TraceModel.task_id == task_id)
+    )
+    completed_agents: set[str] = set()
+    failed_agents: set[str] = set()
+    for trace in trace_result.scalars().all():
+        for event in trace.events or []:
+            if not isinstance(event, dict):
+                continue
+            agent = event.get("agent_name", "")
+            etype = event.get("event_type", "")
+            if etype == "output" and agent:
+                completed_agents.add(agent)
+            if etype == "error" and agent:
+                failed_agents.add(agent)
+
+    # Determine the currently-running node from task status
+    running_node = _STATUS_TO_RUNNING_NODE.get(task.status, "")
+
+    # Build node statuses
+    nodes: list[DagNodeResponse] = []
+    for n in _DAG_NODES:
+        nid = n["id"]
+        if nid in failed_agents:
+            status = "failed"
+        elif nid in completed_agents:
+            status = "completed"
+        elif nid == running_node:
+            status = "running"
+        else:
+            status = "pending"
+        nodes.append(DagNodeResponse(
+            id=nid, label=n["label"], type=n["type"], status=status,
+        ))
+
+    edges = [DagEdgeResponse(**e) for e in _DAG_EDGES]
+    return DagStructureResponse(nodes=nodes, edges=edges)
+
+
 @router.post("/{task_id}/rerun", status_code=202)
 async def rerun_task(task_id: str, session: AsyncSession = Depends(get_session)):
     """Re-run pipeline preserving existing sources and constraints."""
@@ -301,3 +415,58 @@ async def rerun_task(task_id: str, session: AsyncSession = Depends(get_session))
 
     _create_tracked_task(_safe_run())
     return {"message": "Pipeline rerun started", "task_id": task_id}
+
+
+# ---------------------------------------------------------------------------
+# Survey & Interview endpoints
+# ---------------------------------------------------------------------------
+
+@router.get("/{task_id}/survey")
+async def get_task_survey(task_id: str, session: AsyncSession = Depends(get_session)):
+    """Return the survey questionnaire generated for this task."""
+    task = await session.get(TaskModel, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    result = await session.execute(
+        select(SurveyModel).where(SurveyModel.task_id == task_id)
+    )
+    survey = result.scalar_one_or_none()
+    if not survey:
+        raise HTTPException(status_code=404, detail="Survey not found")
+    return survey.content
+
+
+@router.get("/{task_id}/interview")
+async def get_task_interview(task_id: str, session: AsyncSession = Depends(get_session)):
+    """Return the interview guide generated for this task."""
+    task = await session.get(TaskModel, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    result = await session.execute(
+        select(InterviewModel).where(InterviewModel.task_id == task_id)
+    )
+    interview = result.scalar_one_or_none()
+    if not interview:
+        raise HTTPException(status_code=404, detail="Interview guide not found")
+    return interview.content
+
+
+@router.get("/{task_id}/analysis")
+async def get_task_analysis(task_id: str, session: AsyncSession = Depends(get_session)):
+    """Return the structured competitive analysis (feature trees / pricing /
+    personas / SWOT) used to build the comparison matrix and SWOT quadrants."""
+    task = await session.get(TaskModel, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    result = await session.execute(
+        select(AnalysisModel)
+        .where(AnalysisModel.task_id == task_id)
+        .order_by(AnalysisModel.created_at.desc(), AnalysisModel.id.desc())
+    )
+    analysis = result.scalars().first()
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+    return analysis.content

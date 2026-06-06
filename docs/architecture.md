@@ -47,22 +47,27 @@ Competa 是一个多 Agent 协作的 AI 竞品分析系统，核心流程为"信
 
 | Agent | 输入 | 输出 | 职责 |
 |-------|------|------|------|
-| **Collector** | target_product, competitors, industry, constraints | sources[] | 多源信息采集（URL/文档/访谈/问卷） |
+| **Collector** | target_product, competitors, industry, constraints | sources[] | 多源信息采集（URL/文档/访谈/问卷），采集前遵守 robots.txt |
+| **Survey** | target_product, competitors, industry, focus_areas | survey（问卷题目） | 设计竞品分析问卷 |
+| **Interview** | target_product, competitors, survey_questions | interview（访谈提纲） | 设计半结构化访谈提纲，承接问卷维度 |
+| **Fieldwork** | survey, interview, personas | fieldwork + sources[] | 模拟执行问卷与访谈，结果回流为可溯源 SURVEY/INTERVIEW 证据 |
 | **Analyst** | sources[], constraints | feature_trees, pricing_models, personas, swot_analyses | 结构化竞争情报提取 |
 | **Writer** | analysis, target_product, constraints | report (sections + claims + evidence_ids) | 报告撰写，每条 Claim 绑定 Evidence |
 | **QA** | report, sources, retry_count | passed, issues, metrics, handoff, constraints | 质检 + 棘轮约束生成 + Handoff 指令 |
+
+> **调研执行闭环**：Survey/Interview Agent 只产出"设计"，Fieldwork Agent 基于 personas 与竞品上下文模拟生成问卷应答与访谈摘录（明确标注 `[模拟]`，reliability 0.55/0.6），并转成 SURVEY/INTERVIEW 类型 source 合入证据池喂给 Analyst——让"问卷调研、用户访谈"对最终结论真正产生贡献，而非悬空的设计产物。
 
 ## 3. DAG 编排（LangGraph）
 
 流程定义在 `orchestration/graph.py`，使用 `StateGraph(PipelineState)` 构建：
 
 ```
-collect → analyze → write → filter → qa → qa_router
-                                        ├── passed → END
-                                        ├── retry_count > MAX_RETRIES → END (failed)
-                                        ├── retry_target == collector → collect
-                                        ├── retry_target == analyst → analyze
-                                        └── retry_target == writer → write
+collect → survey → interview → fieldwork → analyze → write → screenshot → filter → qa → qa_router
+                                                                                        ├── passed → END
+                                                                                        ├── retry_count > MAX_RETRIES → END (failed)
+                                                                                        ├── retry_target == collector → collect
+                                                                                        ├── retry_target == analyst → analyze
+                                                                                        └── retry_target == writer → write
 ```
 
 - **MAX_RETRIES = 2**：最多打回 2 次
@@ -123,10 +128,13 @@ SQLite + SQLAlchemy async，6 张表：
 |----|------|
 | `tasks` | 分析任务（目标产品、竞品、状态） |
 | `sources` | 数据来源（URL/文档/访谈/问卷） |
+| `analyses` | 结构化竞品知识（功能树/定价/画像/SWOT），驱动对比矩阵与 SWOT 象限 |
 | `reports` | 结构化报告（JSON content） |
 | `traces` | Agent 执行追踪（JSON events） |
 | `constraints` | 棘轮约束记录 |
 | `metrics` | 业务 KPI（覆盖率、引用率等） |
+
+> **分析产物落地**：Analyst Agent 产出的 `AnalyzeResult`（功能树/定价模型/用户画像/SWOT）由 `runner.py` 持久化到 `analyses` 表，并通过 `GET /tasks/{id}/analysis` 暴露。前端 `ComparisonMatrix` 组件据此渲染**功能对比矩阵**（竞品为列、功能为行，✓/部分/✗ 状态色块）、**定价对比**、**SWOT 四象限**（条目带 evidence 角标可溯源）与**用户画像卡片**——区别于 Writer 产出的叙述性报告。
 
 ## 9. API 设计
 

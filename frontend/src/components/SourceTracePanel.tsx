@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useState } from "react";
 import { X, ExternalLink, Link2, ShieldCheck } from "lucide-react";
 import type { Source, Claim } from "../api/client";
 import { ReliabilityBadge } from "./ReliabilityBadge";
@@ -10,11 +10,11 @@ interface SourceTracePanelProps {
 }
 
 export default function SourceTracePanel({ source, claims, onClose }: SourceTracePanelProps) {
-  const panelRef = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState(false);
 
   useEffect(() => {
-    // Slide-in animation
-    panelRef.current?.classList.add("translate-x-0");
+    // Trigger slide-in after mount
+    requestAnimationFrame(() => setVisible(true));
   }, []);
 
   // Find claims that cite this source
@@ -24,8 +24,7 @@ export default function SourceTracePanel({ source, claims, onClose }: SourceTrac
 
   return (
     <div
-      ref={panelRef}
-      className="fixed top-0 right-0 h-full w-96 bg-white shadow-2xl border-l border-gray-200 z-50 transform translate-x-full transition-transform duration-300 ease-out flex flex-col"
+      className={`fixed top-0 right-0 h-full w-96 bg-white shadow-2xl border-l border-gray-200 z-50 transform transition-transform duration-300 ease-out flex flex-col ${visible ? "translate-x-0" : "translate-x-full"}`}
     >
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-b border-gray-100">
