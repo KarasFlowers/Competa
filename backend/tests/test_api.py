@@ -4,7 +4,17 @@ from datetime import datetime, timedelta
 
 from httpx import AsyncClient
 
-from app.models.database import ConstraintModel, MetricsModel, ReportModel, SourceModel, TaskModel, TraceModel
+from app.models.database import (
+    AnalysisModel,
+    ConstraintModel,
+    InterviewModel,
+    MetricsModel,
+    ReportModel,
+    SourceModel,
+    SurveyModel,
+    TaskModel,
+    TraceModel,
+)
 from tests.conftest import TestSession
 
 
@@ -53,6 +63,63 @@ class TestTasks:
     async def test_get_nonexistent_task(self, client: AsyncClient):
         resp = await client.get("/api/tasks/nonexistent")
         assert resp.status_code == 404
+
+    async def test_tasks_overview_returns_stats_and_artifacts(self, client: AsyncClient):
+        resp = await client.post(
+            "/api/tasks",
+            json={
+                "industry": "AI",
+                "target_product": "WorkspaceA",
+                "competitors": ["Alpha", "Beta"],
+                "our_product_notes": "Internal differentiation notes",
+            },
+        )
+        task_id = resp.json()["id"]
+
+        resp = await client.post(
+            "/api/tasks",
+            json={"industry": "AI", "target_product": "WorkspaceB"},
+        )
+        failed_task_id = resp.json()["id"]
+
+        async with TestSession() as session:
+            failed_task = await session.get(TaskModel, failed_task_id)
+            failed_task.status = "failed"
+            session.add_all([
+                MetricsModel(
+                    task_id=task_id,
+                    source_count=6,
+                    claim_count=9,
+                    evidence_coverage_rate=0.88,
+                    manual_correction_count=1,
+                ),
+                ReportModel(task_id=task_id, title="Report", content={"title": "R"}),
+                AnalysisModel(task_id=task_id, content={"feature_trees": []}),
+                TraceModel(task_id=task_id, agent_name="pipeline", events=[]),
+                SurveyModel(task_id=task_id, content={"title": "Survey"}),
+                InterviewModel(task_id=task_id, content={"title": "Interview"}),
+            ])
+            await session.commit()
+
+        resp = await client.get("/api/tasks/overview")
+        assert resp.status_code == 200
+        data = resp.json()
+
+        assert data["stats"]["total_tasks"] >= 2
+        assert data["stats"]["failed_tasks"] >= 1
+        assert data["stats"]["reports_ready"] >= 1
+        assert data["stats"]["avg_evidence_coverage"] == 0.88
+
+        item = next(t for t in data["items"] if t["id"] == task_id)
+        assert item["our_product_notes"] == "Internal differentiation notes"
+        assert item["metrics"]["source_count"] == 6
+        assert item["artifacts"] == {
+            "report": True,
+            "analysis": True,
+            "traces": True,
+            "survey": True,
+            "interview": True,
+        }
 
 
 class TestReportsAndSources:

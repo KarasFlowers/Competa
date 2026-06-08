@@ -27,6 +27,7 @@ async def create_tables() -> None:
 async def _migrate_add_columns(conn) -> None:
     """Add columns that may be missing from existing tables."""
     migrations = [
+        ("tasks", "our_product_notes", "TEXT DEFAULT ''"),
         ("sources", "reliability_score", "FLOAT DEFAULT 0.5"),
     ]
     for table, column, col_type in migrations:

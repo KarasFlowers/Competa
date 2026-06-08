@@ -24,6 +24,41 @@ export interface Task {
   updated_at: string;
 }
 
+export interface TaskArtifactSummary {
+  report: boolean;
+  analysis: boolean;
+  traces: boolean;
+  survey: boolean;
+  interview: boolean;
+}
+
+export interface TaskMetricsSummary {
+  source_count: number;
+  claim_count: number;
+  evidence_coverage_rate: number;
+  manual_correction_count: number;
+}
+
+export interface TaskOverviewItem extends Task {
+  metrics: TaskMetricsSummary | null;
+  artifacts: TaskArtifactSummary;
+}
+
+export interface TaskOverviewStats {
+  total_tasks: number;
+  active_tasks: number;
+  completed_tasks: number;
+  failed_tasks: number;
+  reports_ready: number;
+  avg_evidence_coverage: number | null;
+  status_counts: Record<string, number>;
+}
+
+export interface TaskOverviewResponse {
+  stats: TaskOverviewStats;
+  items: TaskOverviewItem[];
+}
+
 export interface TaskCreatePayload {
   industry?: string;
   target_product: string;
@@ -128,6 +163,7 @@ export interface SSEEvent {
 
 export const taskApi = {
   create: (data: TaskCreatePayload) => api.post<Task>("/tasks", data),
+  overview: () => api.get<TaskOverviewResponse>("/tasks/overview"),
   list: () => api.get<Task[]>("/tasks"),
   get: (id: string) => api.get<Task>(`/tasks/${id}`),
   run: (id: string) => api.post<{ message: string; task_id: string }>(`/tasks/${id}/run`),
