@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { Link } from "react-router-dom";
-import { BarChart3, Search, FileText, ShieldCheck, Play, Pause, RotateCcw, Eye } from "lucide-react";
+import { BarChart3, Search, FileText, ShieldCheck, Play, Pause, RotateCcw, Eye, FolderKanban } from "lucide-react";
 import { demoApi, type DemoScenarioSummary } from "../api/client";
 
 const features = [
@@ -168,15 +168,23 @@ export default function Landing() {
           >
             开始分析
           </Link>
-          {demos.length > 0 && (
+          <Link
+            to="/tasks"
+            className="inline-flex items-center px-6 py-3 text-base font-medium text-blue-700 bg-white border border-blue-200 rounded-lg hover:bg-blue-50 transition-colors"
+          >
+            <FolderKanban className="w-5 h-5 mr-2" /> 任务工作台
+          </Link>
+        </div>
+        {demos.length > 0 && (
+          <div className="mt-4">
             <a
               href="#demos"
-              className="inline-flex items-center px-6 py-3 text-base font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
+              className="inline-flex items-center text-sm font-medium text-blue-600 hover:text-blue-700"
             >
-              <Eye className="w-5 h-5 mr-2" /> 查看示例
+              <Eye className="w-4 h-4 mr-1.5" /> 查看示例场景
             </a>
-          )}
-        </div>
+          </div>
+        )}
       </section>
 
       {/* Agent Simulator */}

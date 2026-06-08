@@ -1,5 +1,12 @@
-import { Outlet, Link } from "react-router-dom";
+import { Outlet, Link, NavLink } from "react-router-dom";
 import { BarChart3 } from "lucide-react";
+
+function navClassName(isActive: boolean) {
+  return [
+    "text-sm font-medium transition-colors",
+    isActive ? "text-blue-700" : "text-gray-600 hover:text-gray-900",
+  ].join(" ");
+}
 
 export default function Layout() {
   return (
@@ -12,12 +19,19 @@ export default function Layout() {
               Competa
             </Link>
             <nav className="flex items-center gap-6">
-              <Link
+              <NavLink
                 to="/"
-                className="text-sm font-medium text-gray-600 hover:text-gray-900 transition-colors"
+                end
+                className={({ isActive }) => navClassName(isActive)}
               >
                 首页
-              </Link>
+              </NavLink>
+              <NavLink
+                to="/tasks"
+                className={({ isActive }) => navClassName(isActive)}
+              >
+                任务工作台
+              </NavLink>
               <Link
                 to="/tasks/new"
                 className="inline-flex items-center px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"

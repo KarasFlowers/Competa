@@ -74,6 +74,7 @@ npm run dev
 |------|------|------|
 | GET | `/api/health` | 健康检查 |
 | POST | `/api/tasks` | 创建分析任务 |
+| GET | `/api/tasks/overview` | 获取任务工作台总览与产物状态 |
 | GET | `/api/tasks` | 列出任务 |
 | GET | `/api/tasks/{id}` | 查询任务 |
 | POST | `/api/tasks/{id}/run` | 启动 Pipeline |
@@ -91,6 +92,7 @@ npm run dev
 | 路由 | 页面 |
 |------|------|
 | `/` | 首页（功能介绍） |
+| `/tasks` | 任务工作台（筛选、追踪、快捷访问产物） |
 | `/tasks/new` | 创建分析任务 |
 | `/tasks/:id` | 任务详情 + Metrics + 运行控制 |
 | `/tasks/:id/report` | 报告查看 + 引用溯源 |
@@ -101,6 +103,7 @@ npm run dev
 - **Evidence 强制绑定**：无引用 Claim 被 Filter 节点过滤，不进入最终报告
 - **结构化 Handoff**：QA 打回通过 HandoffInstruction 传递目标 Agent、问题类型、失败字段、证据要求
 - **改善记录**：重跑后 evidence_coverage delta 写入 Trace，可量化展示改进
+- **任务工作台**：集中查看任务状态、报告就绪情况、核心质量指标与调研产物入口
 
 ## 测试
 

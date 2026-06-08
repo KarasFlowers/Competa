@@ -26,6 +26,18 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 STARTABLE_TASK_STATUSES = ("pending", "failed", "completed")
+ACTIVE_TASK_STATUSES = (
+    "collecting",
+    "surveying",
+    "interviewing",
+    "fieldwork",
+    "analyzing",
+    "writing",
+    "screenshotting",
+    "filtering",
+    "qa",
+    "retrying",
+)
 
 # Track background tasks to prevent GC from cancelling them
 _background_tasks: set[asyncio.Task] = set()
@@ -84,6 +96,69 @@ class TaskResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class TaskArtifactSummary(BaseModel):
+    report: bool
+    analysis: bool
+    traces: bool
+    survey: bool
+    interview: bool
+
+
+class TaskMetricsSummary(BaseModel):
+    source_count: int
+    claim_count: int
+    evidence_coverage_rate: float
+    manual_correction_count: int
+
+
+class TaskOverviewItem(BaseModel):
+    id: str
+    industry: str
+    target_product: str
+    competitors: list[str | CompetitorInput]
+    our_product_notes: str = ""
+    status: str
+    created_at: datetime
+    updated_at: datetime
+    metrics: TaskMetricsSummary | None = None
+    artifacts: TaskArtifactSummary
+
+
+class TaskOverviewStats(BaseModel):
+    total_tasks: int
+    active_tasks: int
+    completed_tasks: int
+    failed_tasks: int
+    reports_ready: int
+    avg_evidence_coverage: float | None = None
+    status_counts: dict[str, int]
+
+
+class TaskOverviewResponse(BaseModel):
+    stats: TaskOverviewStats
+    items: list[TaskOverviewItem]
+
+
+def _build_task_id_set(values: list[str | None]) -> set[str]:
+    return {value for value in values if value}
+
+
+def _latest_by_task_id(records: list, task_id_attr: str, time_attr: str) -> dict[str, object]:
+    latest: dict[str, object] = {}
+    for record in sorted(
+        records,
+        key=lambda item: (
+            getattr(item, task_id_attr),
+            getattr(item, time_attr),
+            getattr(item, "id", ""),
+        ),
+        reverse=True,
+    ):
+        task_id = getattr(record, task_id_attr)
+        latest.setdefault(task_id, record)
+    return latest
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -107,6 +182,82 @@ async def create_task(body: TaskCreate, session: AsyncSession = Depends(get_sess
     await session.commit()
     await session.refresh(task)
     return task
+
+
+@router.get("/overview", response_model=TaskOverviewResponse)
+async def get_tasks_overview(session: AsyncSession = Depends(get_session)):
+    tasks_result = await session.execute(
+        select(TaskModel).order_by(TaskModel.updated_at.desc(), TaskModel.created_at.desc())
+    )
+    tasks = tasks_result.scalars().all()
+
+    metrics_result = await session.execute(select(MetricsModel))
+    latest_metrics = _latest_by_task_id(
+        metrics_result.scalars().all(),
+        task_id_attr="task_id",
+        time_attr="calculated_at",
+    )
+
+    report_ids = _build_task_id_set((await session.execute(select(ReportModel.task_id))).scalars().all())
+    analysis_ids = _build_task_id_set((await session.execute(select(AnalysisModel.task_id))).scalars().all())
+    trace_ids = _build_task_id_set((await session.execute(select(TraceModel.task_id))).scalars().all())
+    survey_ids = _build_task_id_set((await session.execute(select(SurveyModel.task_id))).scalars().all())
+    interview_ids = _build_task_id_set((await session.execute(select(InterviewModel.task_id))).scalars().all())
+
+    items: list[TaskOverviewItem] = []
+    status_counts: dict[str, int] = {}
+    coverage_values: list[float] = []
+
+    for task in tasks:
+        status_counts[task.status] = status_counts.get(task.status, 0) + 1
+        metrics_row = latest_metrics.get(task.id)
+        metrics_summary = None
+        if metrics_row:
+            coverage = float(metrics_row.evidence_coverage_rate)
+            coverage_values.append(coverage)
+            metrics_summary = TaskMetricsSummary(
+                source_count=metrics_row.source_count,
+                claim_count=metrics_row.claim_count,
+                evidence_coverage_rate=coverage,
+                manual_correction_count=metrics_row.manual_correction_count,
+            )
+
+        items.append(
+            TaskOverviewItem(
+                id=task.id,
+                industry=task.industry,
+                target_product=task.target_product,
+                competitors=task.competitors or [],
+                our_product_notes=task.our_product_notes or "",
+                status=task.status,
+                created_at=task.created_at,
+                updated_at=task.updated_at,
+                metrics=metrics_summary,
+                artifacts=TaskArtifactSummary(
+                    report=task.id in report_ids,
+                    analysis=task.id in analysis_ids,
+                    traces=task.id in trace_ids,
+                    survey=task.id in survey_ids,
+                    interview=task.id in interview_ids,
+                ),
+            )
+        )
+
+    stats = TaskOverviewStats(
+        total_tasks=len(tasks),
+        active_tasks=sum(1 for task in tasks if task.status in ACTIVE_TASK_STATUSES),
+        completed_tasks=sum(1 for task in tasks if task.status == "completed"),
+        failed_tasks=sum(1 for task in tasks if task.status == "failed"),
+        reports_ready=sum(1 for task in tasks if task.id in report_ids),
+        avg_evidence_coverage=(
+            round(sum(coverage_values) / len(coverage_values), 4)
+            if coverage_values
+            else None
+        ),
+        status_counts=status_counts,
+    )
+
+    return TaskOverviewResponse(stats=stats, items=items)
 
 
 @router.get("", response_model=list[TaskResponse])
