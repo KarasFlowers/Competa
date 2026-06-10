@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useRef, useState, type FormEvent } from "react";
 import { useParams, Link } from "react-router-dom";
 import {
   taskApi,
@@ -165,7 +165,7 @@ export default function TaskDetail() {
 
   useEffect(() => {
     if (!id) return;
-    loadTaskSnapshot(id).catch(() => setError("Task not found"));
+    loadTaskSnapshot(id).catch(() => setError("任务未找到"));
   }, [id]);
 
   // Set up SSE when running
@@ -248,7 +248,7 @@ export default function TaskDetail() {
           : prev
       ));
     } catch (e: any) {
-      setError(e.response?.data?.detail || "Failed to start pipeline");
+      setError(e.response?.data?.detail || "启动分析失败");
     }
   };
 
@@ -273,11 +273,11 @@ export default function TaskDetail() {
           : prev
       ));
     } catch (e: any) {
-      setError(e.response?.data?.detail || "Failed to restart pipeline");
+      setError(e.response?.data?.detail || "重新生成失败");
     }
   };
 
-  const handleAddSource = async (e: React.FormEvent) => {
+  const handleAddSource = async (e: FormEvent) => {
     e.preventDefault();
     if (!id) return;
     try {
@@ -289,7 +289,7 @@ export default function TaskDetail() {
       setNewSource({ title: "", url: "", content_snippet: "", type: "url" });
       loadTaskSnapshot(id).catch(() => {});
       // Suggest rerun
-      toast("资料已补充！请点击「重新生成」以纳入新资料并修正报告。", "success");
+      toast("资料已补充！请点击「保留资料重生成」以纳入新资料并修正报告。", "success");
     } catch (err) {
       toast("补充资料失败", "error");
     }
@@ -343,8 +343,9 @@ export default function TaskDetail() {
           <button
             onClick={handleRun}
             className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+            title={task.status === "completed" ? "清空当前结果与资料，从头重新运行任务" : undefined}
           >
-            启动分析
+            {task.status === "completed" ? "全量重跑" : task.status === "failed" ? "重新开始" : "启动分析"}
           </button>
         )}
         {task.status === "completed" && (
@@ -389,7 +390,7 @@ export default function TaskDetail() {
               title="保留现有资料和约束，重新生成报告"
             >
               <RefreshCw className="w-4 h-4" />
-              重新生成
+              保留资料重生成
             </button>
           </div>
         )}
@@ -444,10 +445,10 @@ export default function TaskDetail() {
           <div className="rounded-2xl border border-gray-200 bg-white p-5">
             <div className="flex items-center gap-2 text-gray-900">
               <Sparkles className="h-4 w-4 text-blue-600" />
-              <h2 className="text-lg font-semibold">研究背景 / 分析 brief</h2>
+              <h2 className="text-lg font-semibold">研究背景 / 分析说明</h2>
             </div>
             <p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-gray-600">
-              {task.our_product_notes?.trim() || "当前没有补充研究背景或分析 brief。"}
+              {task.our_product_notes?.trim() || "当前没有补充研究背景或分析说明。"}
             </p>
           </div>
         </section>
@@ -718,13 +719,13 @@ export default function TaskDetail() {
               </div>
               <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-gray-500">
                 {sseEvent.duration !== undefined && <div>耗时: {sseEvent.duration}s</div>}
-                {sseEvent.tokens !== undefined && <div>Tokens: {sseEvent.tokens}</div>}
+                {sseEvent.tokens !== undefined && <div>Tokens：{sseEvent.tokens}</div>}
                 {sseEvent.passed !== undefined && (
                   <div className={sseEvent.passed ? "text-green-600" : "text-red-600"}>
                     质检: {sseEvent.passed ? "通过" : "打回"}
                   </div>
                 )}
-                {sseEvent.retry_target && <div>打回至: {sseEvent.retry_target} (Retry #{sseEvent.retry_count})</div>}
+                {sseEvent.retry_target && <div>打回至: {sseEvent.retry_target}（第 {sseEvent.retry_count} 次重试）</div>}
                 {sseEvent.removed_claims !== undefined && <div>过滤无引用结论: {sseEvent.removed_claims}条</div>}
               </div>
             </div>

@@ -8,13 +8,13 @@ export function ReliabilityBadge({ score }: ReliabilityBadgeProps) {
   let colorClass: string;
 
   if (score >= 0.8) {
-    label = "High";
+    label = "高";
     colorClass = "bg-green-100 text-green-700";
   } else if (score >= 0.6) {
-    label = "Medium";
+    label = "中";
     colorClass = "bg-yellow-100 text-yellow-700";
   } else {
-    label = "Low";
+    label = "低";
     colorClass = "bg-red-100 text-red-700";
   }
 

@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useState, type FormEvent } from "react";
 import { useParams, Link } from "react-router-dom";
 import {
   taskApi,
@@ -14,11 +14,17 @@ import {
   type CurationSummary,
 } from "../api/client";
 import { Edit3, Download } from "lucide-react";
+import MarkdownContent from "../components/MarkdownContent";
 import { useToast } from "../components/Toast";
 import { ReliabilityBadge } from "../components/ReliabilityBadge";
 import SourceTracePanel from "../components/SourceTracePanel";
 
 const LazyComparisonMatrix = lazy(() => import("../components/ComparisonMatrix"));
+
+const REPORT_STATUS_LABELS: Record<string, string> = {
+  final: "最终稿",
+  draft: "草稿",
+};
 
 const CURATION_REASON_LABELS: Record<string, string> = {
   selected: "已纳入分析",
@@ -90,7 +96,7 @@ export default function ReportView() {
 
   const refreshReport = () => {
     if (!id) return;
-    reportApi.get(id).then((r) => setReport(r.data)).catch(() => setError("Report not found"));
+    reportApi.get(id).then((r) => setReport(r.data)).catch(() => setError("报告未找到"));
   };
 
   useEffect(() => {
@@ -105,7 +111,7 @@ export default function ReportView() {
     analysisApi.get(id).then((r) => setAnalysis(r.data)).catch(() => setAnalysis(null));
   }, [id]);
 
-  const handleEditClaim = async (e: React.FormEvent) => {
+  const handleEditClaim = async (e: FormEvent) => {
     e.preventDefault();
     if (!id || !editingClaim?.id) return;
     
@@ -121,7 +127,7 @@ export default function ReportView() {
       toast("结论已修正", "success");
       refreshReport();
     } catch (err) {
-      toast("Failed to edit claim", "error");
+      toast("修正结论失败", "error");
     }
   };
 
@@ -147,9 +153,10 @@ export default function ReportView() {
   };
 
   if (error) return <div className="p-8 text-red-600">{error}</div>;
-  if (!report) return <div className="p-8 text-gray-500">Loading...</div>;
+  if (!report) return <div className="p-8 text-gray-500">加载报告中...</div>;
 
   const content = report.content;
+  const reportStatusLabel = REPORT_STATUS_LABELS[report.status] ?? report.status;
   const curationSummary = taskMeta?.last_curation_summary ?? {};
   const removedReasons = Object.entries(curationSummary.removed_reasons ?? {}).sort((a, b) => b[1] - a[1]);
 
@@ -166,8 +173,8 @@ export default function ReportView() {
   return (
     <div className={`max-w-4xl mx-auto p-6 space-y-6 ${tracePanelOpen ? "mr-96" : ""} transition-all duration-300`}>
       {/* Back link */}
-      <Link to={`/tasks/${id}`} className="text-blue-600 hover:underline text-sm">
-        &larr; Back to task
+      <Link to={`/tasks/${id}`} className="inline-flex items-center gap-1 text-blue-600 hover:underline text-sm">
+        <span aria-hidden="true">&larr;</span> 返回任务
       </Link>
 
       {/* Report header */}
@@ -177,7 +184,7 @@ export default function ReportView() {
           <span className={`px-2 py-0.5 rounded text-xs font-medium ${
             report.status === "final" ? "bg-green-100 text-green-700" : "bg-yellow-100 text-yellow-700"
           }`}>
-            {report.status}
+            {reportStatusLabel}
           </span>
           <span>{new Date(report.created_at).toLocaleString()}</span>
         </div>
@@ -205,13 +212,13 @@ export default function ReportView() {
             onClick={() => handleExport("markdown")}
             className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
           >
-            <Download className="w-3.5 h-3.5" /> Markdown
+            <Download className="w-3.5 h-3.5" /> 导出 Markdown
           </button>
           <button
             onClick={() => handleExport("docx")}
             className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
           >
-            <Download className="w-3.5 h-3.5" /> Word
+            <Download className="w-3.5 h-3.5" /> 导出 Word
           </button>
         </div>
       </div>
@@ -219,8 +226,8 @@ export default function ReportView() {
       {/* Executive Summary */}
       {content.executive_summary && (
         <section className="bg-blue-50 border border-blue-200 rounded-xl p-5">
-          <h2 className="text-lg font-semibold text-blue-900 mb-2">Executive Summary</h2>
-          <p className="text-gray-800 leading-relaxed">{content.executive_summary}</p>
+          <h2 className="text-lg font-semibold text-blue-900 mb-2">执行摘要</h2>
+          <MarkdownContent content={content.executive_summary} />
         </section>
       )}
 
@@ -262,25 +269,31 @@ export default function ReportView() {
       )}
 
       {/* Sections */}
-      {content.sections?.map((section, i) => (
-        <SectionBlock
-          key={i}
-          section={section}
-          depth={0}
-          onCiteClick={handleCiteClick}
-          onEditClaim={(claim) => {
-            setEditingClaim(claim);
-            setEditedContent(claim.content);
-          }}
-          sourceIndexMap={sourceIndexMap}
-        />
-      ))}
+      {content.sections && content.sections.length > 0 ? (
+        content.sections.map((section, i) => (
+          <SectionBlock
+            key={i}
+            section={section}
+            depth={0}
+            onCiteClick={handleCiteClick}
+            onEditClaim={(claim) => {
+              setEditingClaim(claim);
+              setEditedContent(claim.content);
+            }}
+            sourceIndexMap={sourceIndexMap}
+          />
+        ))
+      ) : (
+        <section className="rounded-xl border border-dashed border-gray-300 bg-gray-50 p-6 text-sm text-gray-500">
+          当前报告还没有正文内容。
+        </section>
+      )}
 
       {/* Sources reference list */}
       {citationSources.length > 0 && (
         <section className="border-t border-gray-200 pt-6">
           <h2 className="text-lg font-semibold text-gray-800 mb-3">
-            {hasSourceCuration ? "已纳入分析的来源" : "Sources"}
+            {hasSourceCuration ? "已纳入分析的来源" : "引用来源"}
           </h2>
           {hasSourceCuration && (
             <p className="mb-3 text-sm text-gray-500">
@@ -417,7 +430,7 @@ function SectionBlock({
     <section className="space-y-3">
       <HeadingTag className={headingClass}>{section.title}</HeadingTag>
       {section.content && (
-        <p className="text-gray-700 leading-relaxed">{section.content}</p>
+        <MarkdownContent content={section.content} />
       )}
       {section.claims && section.claims.length > 0 && (
         <ul className="space-y-2 ml-4">
@@ -446,10 +459,10 @@ function ClaimBlock({
 }) {
   return (
     <li className="bg-gray-50 border border-gray-200 rounded-lg p-3 group relative pr-10">
-      <p className="text-gray-800 text-sm">
-        {claim.content}
+      <div className="space-y-2">
+        <MarkdownContent content={claim.content} compact />
         {claim.evidence_ids && claim.evidence_ids.length > 0 && (
-          <span className="inline-flex gap-0.5 ml-1">
+          <div className="inline-flex flex-wrap gap-1">
             {claim.evidence_ids.map((eid) => (
               <button
                 key={eid}
@@ -460,9 +473,9 @@ function ClaimBlock({
                 [{sourceIndexMap.get(eid) ?? eid.slice(0, 6)}]
               </button>
             ))}
-          </span>
+          </div>
         )}
-      </p>
+      </div>
 
       {claim.id && (
         <button
@@ -475,7 +488,7 @@ function ClaimBlock({
       )}
       {claim.confidence !== undefined && (
         <span className="text-xs text-gray-400 mt-1 block">
-          Confidence: {(claim.confidence * 100).toFixed(0)}%
+          置信度: {(claim.confidence * 100).toFixed(0)}%
         </span>
       )}
     </li>
@@ -530,9 +543,7 @@ function SourceListItem({
         ))}
       </div>
       {excerpt && (
-        <p className="text-sm leading-6 text-gray-600">
-          {excerpt}
-        </p>
+        <MarkdownContent content={excerpt} compact className="text-sm" />
       )}
     </div>
   );
@@ -549,17 +560,17 @@ function SourceModal({ source, onClose }: { source: Source; onClose: () => void 
       >
         <div className="p-6 space-y-4">
           <div className="flex justify-between items-start">
-            <h3 className="text-lg font-semibold text-gray-900">{source.title || "Source Detail"}</h3>
+            <h3 className="text-lg font-semibold text-gray-900">{source.title || "来源详情"}</h3>
             <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl">&times;</button>
           </div>
 
           <div className="space-y-2 text-sm">
             <div>
-              <span className="font-medium text-gray-600">Type:</span>{" "}
+              <span className="font-medium text-gray-600">类型：</span>{" "}
               <span className="px-2 py-0.5 bg-gray-100 rounded text-xs">{source.type}</span>
             </div>
             <div>
-              <span className="font-medium text-gray-600">Status:</span>{" "}
+              <span className="font-medium text-gray-600">状态：</span>{" "}
               <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${
                 source.included_in_analysis ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"
               }`}>
@@ -568,13 +579,13 @@ function SourceModal({ source, onClose }: { source: Source; onClose: () => void 
             </div>
             {source.curation_reason && (
               <div>
-                <span className="font-medium text-gray-600">Curation:</span>{" "}
+                <span className="font-medium text-gray-600">筛选结果：</span>{" "}
                 {getCurationReasonLabel(source.curation_reason)}
               </div>
             )}
             {source.url && (
               <div>
-                <span className="font-medium text-gray-600">URL:</span>{" "}
+                <span className="font-medium text-gray-600">链接：</span>{" "}
                 <a href={source.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline break-all">
                   {source.url}
                 </a>
@@ -582,13 +593,13 @@ function SourceModal({ source, onClose }: { source: Source; onClose: () => void 
             )}
             {source.reliability_score !== undefined && (
               <div className="flex items-center gap-2">
-                <span className="font-medium text-gray-600">Reliability:</span>{" "}
+                <span className="font-medium text-gray-600">可信度：</span>{" "}
                 <ReliabilityBadge score={source.reliability_score} />
                 <span className="text-gray-500 text-xs">({(source.reliability_score * 100).toFixed(0)}%)</span>
               </div>
             )}
             <div>
-              <span className="font-medium text-gray-600">Fetched:</span>{" "}
+              <span className="font-medium text-gray-600">采集时间：</span>{" "}
               {new Date(source.fetched_at).toLocaleString()}
             </div>
           </div>
@@ -604,12 +615,12 @@ function SourceModal({ source, onClose }: { source: Source; onClose: () => void 
           )}
 
           {excerpt && (
-            <div className="bg-gray-50 rounded-lg p-4 text-sm text-gray-700 whitespace-pre-wrap">
-              {excerpt}
+            <div className="bg-gray-50 rounded-lg p-4 text-sm text-gray-700">
+              <MarkdownContent content={excerpt} compact />
             </div>
           )}
 
-          <div className="text-xs text-gray-400">ID: {source.id}</div>
+          <div className="text-xs text-gray-400">ID：{source.id}</div>
         </div>
       </div>
     </div>

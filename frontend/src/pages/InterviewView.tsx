@@ -74,7 +74,7 @@ export default function InterviewView() {
   };
 
   if (error) return <div className="p-8 text-red-600">{error}</div>;
-  if (!interview) return <div className="p-8 text-gray-500">Loading...</div>;
+  if (!interview) return <div className="p-8 text-gray-500">加载中...</div>;
 
   // Group questions by phase
   const phases = ["opening", "core", "probing", "closing"] as const;

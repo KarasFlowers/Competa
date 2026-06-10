@@ -197,6 +197,70 @@ class TestCollectorSearchQueries:
         assert len(queries) == 5
 
 
+class TestCollectorFallback:
+    async def test_retries_without_page_content_when_provider_blocks(self, monkeypatch):
+        from app.agents.collector import CollectorAgent
+        from app.llm.client import LLMContentFilterError, LLMResponse
+        from app.schemas.base import CollectResult, Source
+
+        prompt_history: list[str] = []
+        search_results = [
+            SearchResult(
+                title="Example Pricing",
+                url="https://example.com/pricing",
+                snippet="Pricing overview for Example product.",
+                content="Raw fetched page content that may trigger provider blocks.",
+            )
+        ]
+
+        async def fake_search_products(self, target_product, competitors, industry):
+            return search_results
+
+        async def fake_call_and_validate(self, user_prompt, output_schema, system_prompt=None):
+            prompt_history.append(user_prompt)
+            if "Content:" in user_prompt:
+                raise RuntimeError("collector: blocked") from LLMContentFilterError(
+                    "Your request was blocked."
+                )
+            return (
+                CollectResult(
+                    sources=[
+                        Source(
+                            type="url",
+                            url="https://example.com/pricing",
+                            title="Example Pricing",
+                            content_snippet="Pricing overview for Example product.",
+                        )
+                    ],
+                    coverage_note="ok",
+                ),
+                LLMResponse(
+                    content="{}",
+                    input_tokens=10,
+                    output_tokens=5,
+                    model="test-model",
+                    duration=0.1,
+                ),
+                [],
+            )
+
+        monkeypatch.setattr(CollectorAgent, "_search_products", fake_search_products)
+        monkeypatch.setattr(CollectorAgent, "call_and_validate", fake_call_and_validate)
+
+        agent = CollectorAgent()
+        result = await agent.run({
+            "target_product": "Competa",
+            "competitors": ["Example"],
+            "industry": "SaaS",
+        })
+
+        assert len(prompt_history) == 2
+        assert "Content:" in prompt_history[0]
+        assert "Content:" not in prompt_history[1]
+        assert "Snippet:" in prompt_history[1]
+        assert result["sources"][0]["url"] == "https://example.com/pricing"
+
+
 # ---------------------------------------------------------------------------
 # _find_claim_recursive (from tasks.py)
 # ---------------------------------------------------------------------------

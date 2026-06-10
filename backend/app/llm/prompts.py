@@ -37,7 +37,8 @@ Rules:
 - Each source must have a realistic title and content_snippet.
 - content_snippet should contain factual competitive information.
 - For url type, provide a plausible URL.
-- For interview/survey types, simulate realistic user feedback.
+- For interview/survey types, synthesize evidence-grounded user feedback notes.
+- Do not invent sensitive personal details or unsupported claims.
 - Prefer official company websites and reputable news sources over blogs or social media.
 - When multiple sources cover the same fact, prefer the one from a more authoritative origin.
 """
@@ -77,6 +78,7 @@ def build_collector_prompt(
     focus_areas: list[str] | None = None,
     search_results: list[SearchResult] | None = None,
     our_product_notes: str = "",
+    include_page_content: bool = True,
 ) -> str:
     comp_list = _format_competitors(competitors) if competitors else "  - general competitors"
     # Extract plain names for the focus line
@@ -106,7 +108,7 @@ def build_collector_prompt(
         search_data_lines: list[str] = []
         for i, sr in enumerate(search_results, 1):
             line = f"[{i}] {sr.title}\n    URL: {sr.url}\n    Snippet: {sr.snippet}"
-            if sr.content:
+            if include_page_content and sr.content:
                 # Truncate long content
                 content_preview = sr.content[:2000]
                 if len(sr.content) > 2000:
@@ -119,9 +121,9 @@ def build_collector_prompt(
             base
             + "The following data was retrieved from web searches. "
             "Your job is to organize this into structured sources, filling in "
-            "the required fields. You may also generate interview and survey "
-            "type sources based on the information found, but do NOT fabricate "
-            "URLs or facts not supported by the search data.\n\n"
+            "the required fields. You may also synthesize interview and survey "
+            "type source summaries based on the information found, but do NOT "
+            "fabricate URLs or facts not supported by the search data.\n\n"
             f"SEARCH RESULTS:\n{search_block}\n\n"
             "Include at least one source per type (url, document, interview, survey)."
         )

@@ -5,6 +5,36 @@ import { ArrowLeft, Clock, Activity, SearchCode, ChevronDown, ChevronRight } fro
 
 const LazyDagView = lazy(() => import("../components/DagView"));
 
+const AGENT_LABELS: Record<string, string> = {
+  pipeline: "总流程",
+  collector: "信息采集",
+  survey: "问卷设计",
+  interview: "访谈设计",
+  fieldwork: "调研执行",
+  curator: "证据筛选",
+  analyst: "分析",
+  writer: "报告撰写",
+  screenshot: "截图采集",
+  filter: "证据过滤",
+  qa: "质检",
+};
+
+const EVENT_TYPE_LABELS: Record<string, string> = {
+  start: "开始",
+  input: "输入",
+  output: "输出",
+  status: "状态",
+  error: "错误",
+};
+
+function getAgentLabel(agentName: string) {
+  return AGENT_LABELS[agentName] ?? agentName;
+}
+
+function getEventTypeLabel(eventType: string) {
+  return EVENT_TYPE_LABELS[eventType] ?? eventType;
+}
+
 function SectionLoading({ label }: { label: string }) {
   return (
     <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 px-4 py-8 text-center text-sm text-gray-500">
@@ -84,7 +114,7 @@ export default function TraceView() {
           <div className="w-px h-4 bg-gray-200"></div>
           <div className="flex items-center gap-2">
             <Activity className="w-4 h-4 text-gray-400" />
-            <span className="font-medium">{trace.total_tokens || 0} tokens</span>
+            <span className="font-medium">总 Tokens：{trace.total_tokens || 0}</span>
           </div>
         </div>
       </div>
@@ -138,14 +168,17 @@ export default function TraceView() {
                     >
                       <div className="flex items-center gap-3">
                         <span className="px-2.5 py-0.5 rounded-md bg-white border shadow-sm text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                          {getAgentLabel(event.agent_name)}
+                        </span>
+                        <span className="text-xs text-gray-400 font-mono">
                           {event.agent_name}
                         </span>
                         <span className="text-sm font-medium text-gray-900">
-                          {event.event_type.toUpperCase()}
+                          {getEventTypeLabel(event.event_type)}
                         </span>
                         {(event.retry_attempt || 0) > 1 && (
                           <span className="text-xs text-amber-600 font-medium">
-                            (Retry #{event.retry_attempt})
+                            （第 {event.retry_attempt} 次重试）
                           </span>
                         )}
                         <span className="text-sm text-gray-500">
@@ -155,7 +188,7 @@ export default function TraceView() {
                       
                       <div className="flex items-center gap-4 text-xs text-gray-400">
                         {event.duration && <span>{event.duration.toFixed(2)}s</span>}
-                        {event.token_count && <span>{event.token_count} tkns</span>}
+                        {event.token_count && <span>{event.token_count} Tokens</span>}
                         {event.timestamp && <span>{new Date(event.timestamp).toLocaleTimeString()}</span>}
                         {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
                       </div>
@@ -167,7 +200,7 @@ export default function TraceView() {
                         {event.prompt && (
                           <div>
                             <h4 className="text-xs font-semibold text-gray-500 mb-1 flex items-center gap-1">
-                              <SearchCode className="w-3 h-3" /> System + User Prompt
+                              <SearchCode className="w-3 h-3" /> 系统提示词 + 用户提示词
                             </h4>
                             <div className="bg-gray-900 text-gray-100 text-xs rounded-md p-3 whitespace-pre-wrap font-mono overflow-x-auto max-h-60 overflow-y-auto">
                               {event.prompt}
@@ -176,7 +209,7 @@ export default function TraceView() {
                         )}
                         {event.output_data && (
                           <div>
-                            <h4 className="text-xs font-semibold text-gray-500 mb-1">Output Data / Schema</h4>
+                            <h4 className="text-xs font-semibold text-gray-500 mb-1">输出数据 / Schema</h4>
                             <div className="bg-white border rounded-md p-3 text-xs font-mono overflow-x-auto">
                               <pre>{JSON.stringify(event.output_data, null, 2)}</pre>
                             </div>

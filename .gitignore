@@ -61,3 +61,14 @@ coverage/
 # Backend 特定
 backend/.pytest_cache/
 backend/competa.db
+
+# 本地修缮/调试中间文件
+*_enc.txt
+*_encoded.txt
+*_dec.tsx
+*_decoded.tsx
+frontend/src/pages/Landing_tmp.tsx
+frontend/build_errors.txt
+frontend/tsc_errors.txt
+backend-dev.log
+frontend-dev.log

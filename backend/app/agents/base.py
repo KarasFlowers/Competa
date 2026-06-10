@@ -9,7 +9,7 @@ from typing import Any, Type, TypeVar
 from pydantic import BaseModel
 
 from app.guardrails.validator import GuardrailError, validate_output
-from app.llm.client import LLMResponse, call_llm
+from app.llm.client import LLMContentFilterError, LLMResponse, call_llm
 from app.schemas.trace import EventType, TraceEvent
 
 T = TypeVar("T", bound=BaseModel)
@@ -47,8 +47,10 @@ class BaseAgent:
 
         traces: list[TraceEvent] = []
         last_error: Exception | None = None
+        attempts_used = 0
 
         for attempt in range(1, self.max_retries + 1):
+            attempts_used = attempt
             traces.append(TraceEvent(
                 agent_name=self.name,
                 event_type=EventType.START,
@@ -125,6 +127,22 @@ class BaseAgent:
                     f"Please fix the issues and output valid JSON.",
                 })
 
+            except LLMContentFilterError as e:
+                last_error = e
+                logger.warning(
+                    "%s: Request blocked by provider safety policy (attempt %d): %s",
+                    self.name,
+                    attempt,
+                    e,
+                )
+                traces.append(TraceEvent(
+                    agent_name=self.name,
+                    event_type=EventType.ERROR,
+                    error_message=f"Provider blocked request: {e}",
+                    retry_attempt=attempt,
+                ))
+                break
+
             except Exception as e:
                 last_error = e
                 logger.error("%s: Unexpected error (attempt %d): %s", self.name, attempt, e)
@@ -137,12 +155,23 @@ class BaseAgent:
                 # Non-retryable: break instead of retrying with same input
                 break
 
-        # All retries exhausted
+        if isinstance(last_error, LLMContentFilterError):
+            failure_message = (
+                f"Request blocked by the model provider after {attempts_used} "
+                f"attempt(s). Last error: {last_error}"
+            )
+        elif attempts_used >= self.max_retries:
+            failure_message = (
+                f"All {self.max_retries} attempts failed. Last error: {last_error}"
+            )
+        else:
+            failure_message = (
+                f"Stopped after {attempts_used} attempt(s). Last error: {last_error}"
+            )
+
         traces.append(TraceEvent(
             agent_name=self.name,
             event_type=EventType.END,
-            error_message=f"All {self.max_retries} attempts failed: {last_error}",
+            error_message=failure_message,
         ))
-        raise RuntimeError(
-            f"{self.name}: All {self.max_retries} attempts failed. Last error: {last_error}"
-        )
+        raise RuntimeError(f"{self.name}: {failure_message}") from last_error

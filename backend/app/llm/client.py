@@ -14,6 +14,10 @@ logger = logging.getLogger(__name__)
 _is_mock = False
 
 
+class LLMContentFilterError(RuntimeError):
+    """Raised when the provider blocks a request for safety or policy reasons."""
+
+
 def is_mock_mode() -> bool:
     """Check if mock LLM mode is enabled."""
     return _is_mock
@@ -101,15 +105,28 @@ def _is_content_filter_error(exc: Exception) -> bool:
     # Zhipu/GLM uses 1301 for content filter
     if status == 1301:
         return True
-    msg = str(exc).lower()
+    msg_parts = [str(exc)]
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        inner = body.get("error", {})
+        if isinstance(inner, dict):
+            for field in ("message", "type", "code"):
+                value = inner.get(field)
+                if value:
+                    msg_parts.append(str(value))
+
+    msg = " ".join(msg_parts).lower()
     if any(kw in msg for kw in (
         "content_filter", "contentfilter", "content policy",
         "safety", "inappropriate content", "flagged",
         "content_policy_violation",
+        "your request was blocked",
+        "request was blocked",
+        "blocked by policy",
+        "policy_violation",
     )):
         return True
     # Check OpenAI-style error structure
-    body = getattr(exc, "body", None)
     if isinstance(body, dict):
         inner = body.get("error", {})
         if isinstance(inner, dict) and inner.get("code") in (
@@ -198,19 +215,27 @@ async def call_llm(
             )
         except Exception as exc:
             # Content filter: truncate long messages and retry once
-            if _is_content_filter_error(exc) and not content_filter_retried:
-                logger.warning(
-                    "LLM content filter triggered, truncating messages and retrying"
-                )
-                content_filter_retried = True
-                # Truncate the last user message to reduce trigger risk
-                msgs = kwargs.get("messages", messages)
-                if len(msgs) > 1 and msgs[-1]["role"] == "user":
-                    original = msgs[-1]["content"]
-                    if len(original) > 400:
-                        truncated = original[:400] + "\n\n[Content truncated for safety]"
-                        kwargs["messages"] = msgs[:-1] + [{**msgs[-1], "content": truncated}]
-                continue
+            if _is_content_filter_error(exc):
+                if not content_filter_retried:
+                    logger.warning(
+                        "LLM content filter triggered, truncating messages and retrying"
+                    )
+                    content_filter_retried = True
+                    # Truncate the last user message to reduce trigger risk
+                    msgs = kwargs.get("messages", messages)
+                    if len(msgs) > 1 and msgs[-1]["role"] == "user":
+                        original = msgs[-1]["content"]
+                        if len(original) > 400:
+                            truncated = (
+                                original[:400]
+                                + "\n\n[Content truncated for safety]"
+                            )
+                            kwargs["messages"] = (
+                                msgs[:-1]
+                                + [{**msgs[-1], "content": truncated}]
+                            )
+                    continue
+                raise LLMContentFilterError(str(exc)) from exc
 
             # Auth/rate-limit: rotate to next API key
             if _is_retryable_auth_error(exc) and tried_keys < len(_clients) - 1:

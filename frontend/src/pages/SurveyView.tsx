@@ -76,7 +76,7 @@ export default function SurveyView() {
   };
 
   if (error) return <div className="p-8 text-red-600">{error}</div>;
-  if (!survey) return <div className="p-8 text-gray-500">Loading...</div>;
+  if (!survey) return <div className="p-8 text-gray-500">加载中...</div>;
 
   return (
     <div className="max-w-3xl mx-auto p-6 space-y-6">

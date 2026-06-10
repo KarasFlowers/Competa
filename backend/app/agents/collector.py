@@ -15,6 +15,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from app.agents.base import BaseAgent
+from app.llm.client import LLMContentFilterError
 from app.llm.prompts import COLLECTOR_SYSTEM, build_collector_prompt
 from app.schemas.base import CollectResult
 from app.services.search import SearchResult, fetch_webpages, get_search_provider
@@ -124,6 +125,14 @@ class CollectorAgent(BaseAgent):
     name = "collector"
     system_prompt = COLLECTOR_SYSTEM
 
+    @staticmethod
+    def _append_constraints(prompt: str, constraints: list[str]) -> str:
+        if not constraints:
+            return prompt
+        return prompt + "\n\nYou MUST satisfy these constraints:\n" + "\n".join(
+            constraints
+        )
+
     async def run(self, input_data: dict[str, Any]) -> dict:
         """Run collection.
 
@@ -180,6 +189,7 @@ class CollectorAgent(BaseAgent):
                 search_results = (search_results or []) + supp_results
 
         # Build prompt — with or without search data (AFTER supplementary search)
+        include_page_content = bool(search_results and any(r.content for r in search_results))
         if search_results:
             user_prompt = build_collector_prompt(
                 target_product=target_product,
@@ -189,6 +199,7 @@ class CollectorAgent(BaseAgent):
                 focus_areas=focus_areas,
                 search_results=search_results,
                 our_product_notes=our_product_notes,
+                include_page_content=include_page_content,
             )
         else:
             user_prompt = build_collector_prompt(
@@ -199,16 +210,36 @@ class CollectorAgent(BaseAgent):
                 focus_areas=focus_areas,
                 our_product_notes=our_product_notes,
             )
+        user_prompt = self._append_constraints(user_prompt, constraints)
 
-        if constraints:
-            user_prompt += "\n\nYou MUST satisfy these constraints:\n" + "\n".join(
-                constraints
+        try:
+            validated, llm_resp, traces = await self.call_and_validate(
+                user_prompt=user_prompt,
+                output_schema=CollectResult,
             )
+        except RuntimeError as exc:
+            provider_blocked = isinstance(exc.__cause__, LLMContentFilterError)
+            if not (provider_blocked and search_results and include_page_content):
+                raise
 
-        validated, llm_resp, traces = await self.call_and_validate(
-            user_prompt=user_prompt,
-            output_schema=CollectResult,
-        )
+            logger.warning(
+                "Collector request was blocked with fetched page content; "
+                "retrying with snippet-only search context"
+            )
+            fallback_prompt = build_collector_prompt(
+                target_product=target_product,
+                competitors=competitors,
+                industry=industry,
+                focus_areas=focus_areas,
+                search_results=search_results,
+                our_product_notes=our_product_notes,
+                include_page_content=False,
+            )
+            fallback_prompt = self._append_constraints(fallback_prompt, constraints)
+            validated, llm_resp, traces = await self.call_and_validate(
+                user_prompt=fallback_prompt,
+                output_schema=CollectResult,
+            )
 
         # Convert sources to dicts with IDs for downstream use
         sources = [s.model_dump() for s in validated.sources]

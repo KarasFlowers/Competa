@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { X, ExternalLink, Link2, ShieldCheck } from "lucide-react";
 import type { Source, Claim } from "../api/client";
+import MarkdownContent from "./MarkdownContent";
 import { ReliabilityBadge } from "./ReliabilityBadge";
 
 const CURATION_REASON_LABELS: Record<string, string> = {
@@ -59,7 +60,7 @@ export default function SourceTracePanel({ source, claims, onClose }: SourceTrac
         {/* Source info */}
         <div className="space-y-3">
           <h4 className="font-medium text-gray-900 text-sm leading-snug">
-            {source.title || "Source Detail"}
+            {source.title || "来源详情"}
           </h4>
 
           <div className="flex items-center gap-2">
@@ -128,7 +129,7 @@ export default function SourceTracePanel({ source, claims, onClose }: SourceTrac
             <ul className="space-y-2">
               {citingClaims.map((claim, i) => (
                 <li key={claim.id || i} className="bg-blue-50 border border-blue-100 rounded-lg p-2.5">
-                  <p className="text-xs text-gray-800 leading-relaxed">{claim.content}</p>
+                  <MarkdownContent content={claim.content} compact />
                   {claim.confidence !== undefined && (
                     <span className="text-[10px] text-gray-400 mt-1 block">
                       置信度: {(claim.confidence * 100).toFixed(0)}%

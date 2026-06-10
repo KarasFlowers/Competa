@@ -120,7 +120,7 @@ function AgentSimulator() {
               </div>
               {isCompleted && (
                 <div className="text-xs text-gray-400 flex-shrink-0 text-right">
-                  <div>{step.tokens.toLocaleString()} tokens</div>
+                  <div>{step.tokens.toLocaleString()} Tokens</div>
                   <div>{step.duration}</div>
                 </div>
               )}
@@ -132,9 +132,9 @@ function AgentSimulator() {
       {/* Stats */}
       {currentStep >= 0 && (
         <div className="flex items-center gap-6 pt-3 border-t border-gray-100 text-sm text-gray-600">
-          <span>Total tokens: <strong>{totalTokens.toLocaleString()}</strong></span>
-          <span>Pipeline: <strong>{SIM_STEPS.slice(0, currentStep + 1).reduce((s, step) => s + parseFloat(step.duration), 0).toFixed(1)}s</strong></span>
-          <span>Agents: <strong>{currentStep + 1}/{SIM_STEPS.length}</strong></span>
+          <span>累计 Tokens：<strong>{totalTokens.toLocaleString()}</strong></span>
+          <span>流程耗时：<strong>{SIM_STEPS.slice(0, currentStep + 1).reduce((s, step) => s + parseFloat(step.duration), 0).toFixed(1)}s</strong></span>
+          <span>已完成步骤：<strong>{currentStep + 1}/{SIM_STEPS.length}</strong></span>
         </div>
       )}
     </div>
