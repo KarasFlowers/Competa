@@ -315,6 +315,7 @@ async def run_task(task_id: str, session: AsyncSession = Depends(get_session)):
     task = await session.get(TaskModel, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    resume_from_checkpoint = task.status == "failed"
 
     result = await session.execute(
         update(TaskModel)
@@ -334,28 +335,29 @@ async def run_task(task_id: str, session: AsyncSession = Depends(get_session)):
             detail=f"Task is already in '{current_status}' state, cannot restart",
         )
 
-    for model in (
-        SourceModel,
-        ReportModel,
-        TraceModel,
-        MetricsModel,
-        ConstraintModel,
-        SurveyModel,
-        InterviewModel,
-        AnalysisModel,
-    ):
-        await session.execute(delete(model).where(model.task_id == task_id))
+    if not resume_from_checkpoint:
+        for model in (
+            SourceModel,
+            ReportModel,
+            TraceModel,
+            MetricsModel,
+            ConstraintModel,
+            SurveyModel,
+            InterviewModel,
+            AnalysisModel,
+        ):
+            await session.execute(delete(model).where(model.task_id == task_id))
 
-    task.manual_correction_count = 0
-    task.last_qa_feedback = {}
-    task.last_handoff = {}
-    task.last_curation_summary = {}
+        task.manual_correction_count = 0
+        task.last_qa_feedback = {}
+        task.last_handoff = {}
+        task.last_curation_summary = {}
     await session.commit()
 
     # Launch pipeline in background with exception logging only after claim is committed.
     async def _safe_run():
         try:
-            await run_pipeline(task_id)
+            await run_pipeline(task_id, resume=resume_from_checkpoint)
         except Exception:
             logger.exception("Background pipeline failed for task %s", task_id)
 
@@ -710,7 +712,7 @@ async def rerun_task(task_id: str, session: AsyncSession = Depends(get_session))
 
     async def _safe_run():
         try:
-            await run_pipeline(task_id)
+            await run_pipeline(task_id, resume=False)
         except Exception:
             logger.exception("Background rerun failed for task %s", task_id)
 

@@ -228,6 +228,7 @@ class CollectorAgent(BaseAgent):
             )
             fallback_prompt = build_collector_prompt(
                 target_product=target_product,
+                target_website=target_website,
                 competitors=competitors,
                 industry=industry,
                 focus_areas=focus_areas,
