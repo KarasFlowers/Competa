@@ -42,6 +42,7 @@ const STATUS_META: Record<string, { label: string; className: string }> = {
   filtering: { label: "过滤中", className: "bg-yellow-100 text-yellow-700" },
   qa: { label: "质检中", className: "bg-orange-100 text-orange-700" },
   retrying: { label: "返工中", className: "bg-amber-100 text-amber-700" },
+  awaiting_review: { label: "等待人工确认", className: "bg-cyan-100 text-cyan-700" },
   completed: { label: "已完成", className: "bg-green-100 text-green-700" },
   failed: { label: "失败", className: "bg-red-100 text-red-700" },
 };
@@ -59,6 +60,7 @@ const STATUS_ORDER = [
   "filtering",
   "qa",
   "retrying",
+  "awaiting_review",
   "completed",
   "failed",
 ];
@@ -113,10 +115,11 @@ function TaskMetricsStrip({ task }: { task: TaskOverviewItem }) {
   }
 
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
       <MetricTile label="分析证据" value={task.metrics.source_count.toString()} />
       <MetricTile label="结论" value={task.metrics.claim_count.toString()} />
       <MetricTile label="覆盖率" value={formatCoverage(task.metrics.evidence_coverage_rate)} />
+      <MetricTile label="质量分" value={formatCoverage(task.metrics.quality_score)} />
       <MetricTile label="人工修正" value={task.metrics.manual_correction_count.toString()} />
     </div>
   );
@@ -343,6 +346,7 @@ export default function TasksWorkspace() {
   }, []);
 
   const activeTaskCount = overview?.stats.active_tasks ?? 0;
+  const reviewTaskCount = overview?.stats.review_tasks ?? 0;
 
   useEffect(() => {
     if (activeTaskCount === 0) {
@@ -459,6 +463,12 @@ export default function TasksWorkspace() {
           <span>当前任务 {overview?.stats.total_tasks ?? 0} 个</span>
           <span className="h-1 w-1 rounded-full bg-blue-200" />
           <span>运行中 {activeTaskCount} 个</span>
+          {reviewTaskCount > 0 ? (
+            <>
+              <span className="h-1 w-1 rounded-full bg-blue-200" />
+              <span>待人工确认 {reviewTaskCount} 个</span>
+            </>
+          ) : null}
           <span className="h-1 w-1 rounded-full bg-blue-200" />
           <span>报告就绪 {overview?.stats.reports_ready ?? 0} 个</span>
           {lastUpdatedAt ? (
@@ -470,13 +480,18 @@ export default function TasksWorkspace() {
         </div>
       </section>
 
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
         <MetricTile label="任务总数" value={String(overview?.stats.total_tasks ?? 0)} />
         <MetricTile label="运行中任务" value={String(activeTaskCount)} />
+        <MetricTile label="待人工确认" value={String(reviewTaskCount)} />
         <MetricTile label="报告就绪" value={String(overview?.stats.reports_ready ?? 0)} />
         <MetricTile
           label="平均证据覆盖"
           value={formatCoverage(overview?.stats.avg_evidence_coverage)}
+        />
+        <MetricTile
+          label="平均质量分"
+          value={formatCoverage(overview?.stats.avg_quality_score)}
         />
       </section>
 

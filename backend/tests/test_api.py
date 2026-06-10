@@ -20,7 +20,12 @@ from app.models.database import (
 from tests.conftest import TestSession
 
 
-async def _noop_run_pipeline(task_id: str, *, resume: bool = False) -> None:
+async def _noop_run_pipeline(
+    task_id: str,
+    *,
+    resume: bool = False,
+    state_overrides: dict | None = None,
+) -> None:
     return None
 
 
@@ -41,12 +46,14 @@ class TestTasks:
                 "target_website": "https://producta.example.com",
                 "competitors": ["ProductB", "ProductC"],
                 "focus_areas": ["pricing", "persona", "pricing"],
+                "human_review_required": True,
             },
         )
         assert resp.status_code == 201
         data = resp.json()
         assert data["target_product"] == "ProductA"
         assert data["target_website"] == "https://producta.example.com"
+        assert data["human_review_required"] is True
         assert data["focus_areas"] == ["pricing", "persona"]
         task_id = data["id"]
 
@@ -57,6 +64,7 @@ class TestTasks:
         assert task_id in ids
         assert created_task is not None
         assert created_task["target_website"] == "https://producta.example.com"
+        assert created_task["human_review_required"] is True
 
     async def test_get_task(self, client: AsyncClient):
         resp = await client.post(
@@ -114,10 +122,17 @@ class TestTasks:
             json={"industry": "AI", "target_product": "WorkspaceB"},
         )
         failed_task_id = resp.json()["id"]
+        resp = await client.post(
+            "/api/tasks",
+            json={"industry": "AI", "target_product": "WorkspaceC"},
+        )
+        review_task_id = resp.json()["id"]
 
         async with TestSession() as session:
             failed_task = await session.get(TaskModel, failed_task_id)
             failed_task.status = "failed"
+            review_task = await session.get(TaskModel, review_task_id)
+            review_task.status = "awaiting_review"
             focus_task = await session.get(TaskModel, task_id)
             focus_task.last_curation_summary = {
                 "input_count": 9,
@@ -131,6 +146,8 @@ class TestTasks:
                     source_count=6,
                     claim_count=9,
                     evidence_coverage_rate=0.88,
+                    quality_score=0.82,
+                    quality_breakdown={"score": 0.82},
                     manual_correction_count=1,
                 ),
                 ReportModel(task_id=task_id, title="Report", content={"title": "R"}),
@@ -145,10 +162,12 @@ class TestTasks:
         assert resp.status_code == 200
         data = resp.json()
 
-        assert data["stats"]["total_tasks"] >= 2
+        assert data["stats"]["total_tasks"] >= 3
         assert data["stats"]["failed_tasks"] >= 1
+        assert data["stats"]["review_tasks"] >= 1
         assert data["stats"]["reports_ready"] >= 1
         assert data["stats"]["avg_evidence_coverage"] == 0.88
+        assert data["stats"]["avg_quality_score"] == 0.82
 
         item = next(t for t in data["items"] if t["id"] == task_id)
         assert item["target_website"] == "https://workspacea.example.com"
@@ -156,6 +175,8 @@ class TestTasks:
         assert item["focus_areas"] == ["pricing", "swot"]
         assert item["last_curation_summary"]["kept_count"] == 6
         assert item["metrics"]["source_count"] == 6
+        assert item["metrics"]["quality_score"] == 0.82
+        assert item["metrics"]["quality_breakdown"] == {"score": 0.82}
         assert item["artifacts"] == {
             "report": True,
             "analysis": True,
@@ -362,6 +383,7 @@ class TestReportsAndSources:
                     source_count=1,
                     claim_count=1,
                     evidence_coverage_rate=0.5,
+                    quality_score=0.4,
                     manual_correction_count=0,
                     calculated_at=now - timedelta(minutes=5),
                 ),
@@ -370,6 +392,8 @@ class TestReportsAndSources:
                     source_count=4,
                     claim_count=6,
                     evidence_coverage_rate=0.9,
+                    quality_score=0.86,
+                    quality_breakdown={"score": 0.86},
                     manual_correction_count=0,
                     calculated_at=now,
                 ),
@@ -379,6 +403,8 @@ class TestReportsAndSources:
         resp = await client.get(f"/api/tasks/{task_id}/metrics")
         assert resp.status_code == 200
         assert resp.json()["source_count"] == 4
+        assert resp.json()["quality_score"] == 0.86
+        assert resp.json()["quality_breakdown"] == {"score": 0.86}
 
 
 class TestTraces:
@@ -462,6 +488,51 @@ class TestRunAndStatus:
         assert task.status == "collecting"
         assert source.first() is not None
         assert constraint.first() is not None
+
+    async def test_continue_after_review_adds_writer_constraint_and_resumes(self, client: AsyncClient, monkeypatch):
+        captured: dict[str, object] = {}
+
+        async def _capture_run_pipeline(
+            task_id: str,
+            *,
+            resume: bool = False,
+            state_overrides: dict | None = None,
+        ) -> None:
+            captured["resume"] = resume
+            captured["state_overrides"] = state_overrides
+
+        monkeypatch.setattr("app.api.tasks.run_pipeline", _capture_run_pipeline)
+        resp = await client.post(
+            "/api/tasks",
+            json={"target_product": "ReviewTask", "human_review_required": True},
+        )
+        task_id = resp.json()["id"]
+
+        async with TestSession() as session:
+            task = await session.get(TaskModel, task_id)
+            task.status = "awaiting_review"
+            await session.commit()
+
+        resp = await client.post(
+            f"/api/tasks/{task_id}/continue",
+            json={"instruction": "强调企业治理能力"},
+        )
+        await asyncio.sleep(0)
+        assert resp.status_code == 202
+        assert captured["resume"] is True
+        assert "强调企业治理能力" in " ".join(captured["state_overrides"]["constraints"])
+
+        async with TestSession() as session:
+            task = await session.get(TaskModel, task_id)
+            constraints = (
+                await session.execute(
+                    ConstraintModel.__table__.select().where(ConstraintModel.task_id == task_id)
+                )
+            ).fetchall()
+
+        assert task.status == "writing"
+        assert task.manual_correction_count == 1
+        assert any(row.constraint_value.startswith("CONSTRAINT: human review") for row in constraints)
 
     async def test_completed_task_can_run_again_and_purges_old_artifacts(self, client: AsyncClient, monkeypatch):
         monkeypatch.setattr("app.api.tasks.run_pipeline", _noop_run_pipeline)
@@ -737,6 +808,7 @@ class TestCorrections:
                     source_count=4,
                     claim_count=8,
                     evidence_coverage_rate=0.62,
+                    quality_score=0.58,
                     retry_count=1,
                     manual_correction_count=2,
                     qa_feedback={"passed": False},
@@ -749,6 +821,7 @@ class TestCorrections:
                     source_count=7,
                     claim_count=10,
                     evidence_coverage_rate=0.91,
+                    quality_score=0.84,
                     retry_count=0,
                     manual_correction_count=2,
                     qa_feedback={"passed": True},
@@ -761,6 +834,7 @@ class TestCorrections:
         assert runs.status_code == 200
         assert [item["run_index"] for item in runs.json()] == [2, 1]
         assert runs.json()[0]["curation_summary"]["kept_count"] == 7
+        assert runs.json()[0]["quality_score"] == 0.84
 
         compare = await client.get(f"/api/tasks/{task_id}/runs/latest/compare")
         assert compare.status_code == 200
@@ -772,6 +846,7 @@ class TestCorrections:
             "source_count_delta": 3,
             "claim_count_delta": 2,
             "evidence_coverage_delta": 0.29,
+            "quality_score_delta": 0.26,
             "retry_count_delta": -1,
             "manual_correction_delta": 0,
         }

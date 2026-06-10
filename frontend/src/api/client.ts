@@ -30,6 +30,7 @@ export interface Task {
   competitors: (string | CompetitorInput)[];
   focus_areas: string[];
   our_product_notes: string;
+  human_review_required: boolean;
   manual_correction_count: number;
   last_qa_feedback: Record<string, unknown>;
   last_handoff: Record<string, unknown>;
@@ -51,6 +52,8 @@ export interface TaskMetricsSummary {
   source_count: number;
   claim_count: number;
   evidence_coverage_rate: number;
+  quality_score: number;
+  quality_breakdown: Record<string, unknown>;
   manual_correction_count: number;
 }
 
@@ -62,10 +65,12 @@ export interface TaskOverviewItem extends Task {
 export interface TaskOverviewStats {
   total_tasks: number;
   active_tasks: number;
+  review_tasks: number;
   completed_tasks: number;
   failed_tasks: number;
   reports_ready: number;
   avg_evidence_coverage: number | null;
+  avg_quality_score: number | null;
   status_counts: Record<string, number>;
 }
 
@@ -81,6 +86,7 @@ export interface TaskCreatePayload {
   competitors?: (string | CompetitorInput)[];
   focus_areas?: string[];
   our_product_notes?: string;
+  human_review_required?: boolean;
 }
 
 export interface Report {
@@ -137,6 +143,8 @@ export interface Metrics {
   source_count: number;
   claim_count: number;
   evidence_coverage_rate: number;
+  quality_score: number;
+  quality_breakdown: Record<string, unknown>;
   manual_correction_count: number;
   calculated_at: string;
 }
@@ -188,6 +196,8 @@ export interface RunHistorySummary {
   source_count: number;
   claim_count: number;
   evidence_coverage_rate: number;
+  quality_score: number;
+  quality_breakdown: Record<string, unknown>;
   manual_correction_count: number;
   created_at: string;
   qa_feedback: Record<string, unknown>;
@@ -198,6 +208,7 @@ export interface RunHistoryDelta {
   source_count_delta: number;
   claim_count_delta: number;
   evidence_coverage_delta: number;
+  quality_score_delta: number;
   retry_count_delta: number;
   manual_correction_delta: number;
 }
@@ -226,6 +237,8 @@ export const taskApi = {
   list: () => api.get<Task[]>("/tasks"),
   get: (id: string) => api.get<Task>(`/tasks/${id}`),
   run: (id: string) => api.post<{ message: string; task_id: string }>(`/tasks/${id}/run`),
+  continueAfterReview: (id: string, instruction = "") =>
+    api.post<{ message: string; task_id: string }>(`/tasks/${id}/continue`, { instruction }),
   getStatus: (id: string) => api.get<{ id: string; status: string; target_product: string }>(`/tasks/${id}/status`),
   submitCorrection: (id: string, correction: CorrectionPayload) =>
     api.post<{ message: string; task_id: string }>(`/tasks/${id}/corrections`, correction),

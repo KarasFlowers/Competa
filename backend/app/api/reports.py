@@ -2,7 +2,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -91,6 +91,8 @@ class MetricsResponse(BaseModel):
     source_count: int
     claim_count: int
     evidence_coverage_rate: float
+    quality_score: float = 0.0
+    quality_breakdown: dict = Field(default_factory=dict)
     manual_correction_count: int
     calculated_at: datetime
 

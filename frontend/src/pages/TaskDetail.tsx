@@ -58,6 +58,7 @@ const STATUS_COLORS: Record<string, string> = {
   filtering: "bg-yellow-100 text-yellow-700",
   qa: "bg-orange-100 text-orange-700",
   retrying: "bg-amber-100 text-amber-700",
+  awaiting_review: "bg-cyan-100 text-cyan-700",
   completed: "bg-green-100 text-green-700",
   failed: "bg-red-100 text-red-700",
 };
@@ -75,6 +76,7 @@ const STATUS_LABELS: Record<string, string> = {
   filtering: "过滤中",
   qa: "质检中",
   retrying: "返工中",
+  awaiting_review: "等待人工确认",
   completed: "已完成",
   failed: "失败",
 };
@@ -133,6 +135,8 @@ export default function TaskDetail() {
   const [sseEvent, setSseEvent] = useState<SSEEvent | null>(null);
   const [showSourceModal, setShowSourceModal] = useState(false);
   const [newSource, setNewSource] = useState({ title: "", url: "", content_snippet: "", type: "url" });
+  const [reviewInstruction, setReviewInstruction] = useState("");
+  const [continuingReview, setContinuingReview] = useState(false);
   
   const eventSourceRef = useRef<EventSource | null>(null);
 
@@ -277,6 +281,24 @@ export default function TaskDetail() {
     }
   };
 
+  const handleContinueAfterReview = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!id) return;
+    try {
+      setContinuingReview(true);
+      setError("");
+      await taskApi.continueAfterReview(id, reviewInstruction);
+      setReviewInstruction("");
+      setPolling(true);
+      setTask((prev) => (prev ? { ...prev, status: "writing" } : prev));
+      toast("已继续执行，系统会从报告撰写节点恢复。", "success");
+    } catch (err: any) {
+      toast(err.response?.data?.detail || "继续执行失败", "error");
+    } finally {
+      setContinuingReview(false);
+    }
+  };
+
   const handleAddSource = async (e: FormEvent) => {
     e.preventDefault();
     if (!id) return;
@@ -396,6 +418,35 @@ export default function TaskDetail() {
         )}
       </div>
 
+      {task.status === "awaiting_review" && (
+        <section className="rounded-2xl border border-cyan-200 bg-cyan-50 p-5">
+          <div className="flex items-center gap-2 text-cyan-950">
+            <ShieldCheck className="h-4 w-4 text-cyan-700" />
+            <h2 className="text-lg font-semibold">人工确认点</h2>
+          </div>
+          <p className="mt-2 text-sm leading-6 text-cyan-900/80">
+            结构化分析已经完成，报告撰写会在你确认后继续。这里填写的内容会作为 writer 约束进入 checkpoint 后续执行。
+          </p>
+          <form onSubmit={handleContinueAfterReview} className="mt-4 space-y-3">
+            <textarea
+              rows={3}
+              value={reviewInstruction}
+              onChange={(event) => setReviewInstruction(event.target.value)}
+              placeholder="例如：报告优先突出企业治理能力，不要把价格作为唯一建议依据。"
+              className="w-full rounded-xl border border-cyan-200 bg-white px-4 py-3 text-sm leading-6 text-gray-900 outline-none transition-colors placeholder:text-gray-400 focus:border-cyan-400"
+            />
+            <button
+              type="submit"
+              disabled={continuingReview}
+              className="inline-flex items-center gap-2 rounded-xl bg-cyan-700 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <RefreshCw className={`h-4 w-4 ${continuingReview ? "animate-spin" : ""}`} />
+              {continuingReview ? "继续中..." : "确认并继续生成报告"}
+            </button>
+          </form>
+        </section>
+      )}
+
       {/* Competitors */}
       <section>
         <h2 className="text-lg font-semibold text-gray-800 mb-2">竞品范围</h2>
@@ -458,14 +509,15 @@ export default function TaskDetail() {
       {metrics && (
         <section>
           <h2 className="text-lg font-semibold text-gray-800 mb-3">质量指标</h2>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
             <MetricCard label="分析证据" value={metrics.source_count} />
             <MetricCard label="结论数" value={metrics.claim_count} />
             <MetricCard label="证据覆盖率" value={`${(metrics.evidence_coverage_rate * 100).toFixed(1)}%`} />
+            <MetricCard label="质量分" value={`${(metrics.quality_score * 100).toFixed(1)}%`} />
             <MetricCard label="人工修正" value={metrics.manual_correction_count} />
           </div>
           <p className="mt-3 text-sm text-gray-500">
-            这里的“分析证据”指最终纳入分析链路的来源，不包含被筛除的候选资料。
+            质量分综合证据覆盖、引用密度、结构化完整度和来源质量；“分析证据”指最终纳入分析链路的来源，不包含被筛除的候选资料。
           </p>
         </section>
       )}
@@ -529,7 +581,7 @@ export default function TaskDetail() {
             <TrendingUp className="h-4 w-4 text-blue-600" />
             <h2 className="text-lg font-semibold">最近两次运行对比</h2>
           </div>
-          <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+          <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-6">
             <HistoryMetric
               label="分析证据"
               current={runCompare.current.source_count}
@@ -544,6 +596,11 @@ export default function TaskDetail() {
               label="证据覆盖率"
               current={`${(runCompare.current.evidence_coverage_rate * 100).toFixed(1)}%`}
               delta={runCompare.delta ? `${formatSignedPercent(runCompare.delta.evidence_coverage_delta)}` : undefined}
+            />
+            <HistoryMetric
+              label="质量分"
+              current={`${(runCompare.current.quality_score * 100).toFixed(1)}%`}
+              delta={runCompare.delta ? `${formatSignedPercent(runCompare.delta.quality_score_delta)}` : undefined}
             />
             <HistoryMetric
               label="重试次数"
@@ -673,7 +730,7 @@ export default function TaskDetail() {
                     </span>
                   </div>
                   <div className="text-sm text-gray-500">
-                    证据 {run.source_count} · 结论 {run.claim_count} · 覆盖率 {(run.evidence_coverage_rate * 100).toFixed(1)}%
+                    证据 {run.source_count} · 结论 {run.claim_count} · 覆盖率 {(run.evidence_coverage_rate * 100).toFixed(1)}% · 质量分 {(run.quality_score * 100).toFixed(1)}%
                   </div>
                 </div>
                 {hasCurationSummary(run.curation_summary) ? (

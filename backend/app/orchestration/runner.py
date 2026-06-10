@@ -28,6 +28,7 @@ from app.models.database import (
 from app.orchestration.graph import build_graph, pipeline_graph
 from app.orchestration.state import PipelineState
 from app.schemas.trace import EventType, TraceEvent
+from app.services.evaluation import evaluate_run_quality
 from sqlalchemy.engine import make_url
 from sqlalchemy import delete, select
 
@@ -61,6 +62,8 @@ async def _stream_pipeline_updates(
     *,
     resume: bool,
     final_state: PipelineState,
+    interrupt_before: list[str] | None = None,
+    state_overrides: dict | None = None,
 ) -> AsyncIterator[dict]:
     """Stream graph updates, using SQLite checkpoints for the production graph."""
     if pipeline_graph is not _DEFAULT_PIPELINE_GRAPH:
@@ -73,7 +76,10 @@ async def _stream_pipeline_updates(
 
     async with AsyncSqliteSaver.from_conn_string(_checkpoint_conn_string()) as checkpointer:
         await checkpointer.setup()
-        graph = build_graph().compile(checkpointer=checkpointer)
+        graph = build_graph().compile(
+            checkpointer=checkpointer,
+            interrupt_before=interrupt_before,
+        )
 
         checkpoint = await checkpointer.aget_tuple(config)
         if not resume:
@@ -82,6 +88,8 @@ async def _stream_pipeline_updates(
 
         if resume and checkpoint is not None:
             logger.info("Resuming pipeline for task %s from LangGraph checkpoint", task_id)
+            if state_overrides:
+                await graph.aupdate_state(config, state_overrides)
             snapshot = await graph.aget_state(config)
             if snapshot.values:
                 final_state.update(snapshot.values)
@@ -134,7 +142,20 @@ def _serialize_trace_events(trace_events: list[dict]) -> list[dict]:
     return jsonable_encoder(trace_events)
 
 
-async def run_pipeline(task_id: str, *, resume: bool = False) -> None:
+def _trace_status_for_pipeline_status(status: str | None) -> str:
+    if status == "completed":
+        return "completed"
+    if status == "awaiting_review":
+        return "paused"
+    return "failed"
+
+
+async def run_pipeline(
+    task_id: str,
+    *,
+    resume: bool = False,
+    state_overrides: dict | None = None,
+) -> None:
     """Execute the full pipeline for a task.
 
     Loads task from DB, runs LangGraph DAG, and persists
@@ -201,14 +222,22 @@ async def run_pipeline(task_id: str, *, resume: bool = False) -> None:
                 "constraints": existing_constraints,
                 "screenshot_paths": [],
             }
+            if state_overrides:
+                initial_state.update(state_overrides)
             final_state: PipelineState = dict(initial_state)
+            interrupt_before = ["write"] if task.human_review_required and not resume else None
 
             # Run the graph and persist intermediate statuses as each node finishes.
             async for chunk in _stream_pipeline_updates(
                 initial_state,
                 resume=resume,
                 final_state=final_state,
+                interrupt_before=interrupt_before,
+                state_overrides=state_overrides,
             ):
+                if "__interrupt__" in chunk:
+                    final_state["status"] = "awaiting_review"
+                    continue
                 _merge_state_update(final_state, chunk)
                 next_status = final_state.get("status")
                 if next_status and task.status != next_status:
@@ -291,12 +320,24 @@ async def run_pipeline(task_id: str, *, resume: bool = False) -> None:
                         for event in trace_events
                         if isinstance(event, dict) and event.get("token_count")
                     ),
-                    status="completed" if final_state.get("status") == "completed" else "failed",
+                    status=_trace_status_for_pipeline_status(final_state.get("status")),
                 )
                 session.add(trace)
 
+            if final_state.get("status") == "awaiting_review":
+                task.status = "awaiting_review"
+                task.last_handoff = {
+                    "target_agent": "writer",
+                    "issue_type": "human_review",
+                    "evidence_requirements": "User review is required before report writing.",
+                }
+                await session.commit()
+                logger.info("Pipeline paused for human review on task %s", task_id)
+                return
+
             # Persist metrics
             metrics_data = final_state.get("metrics", {})
+            quality_evaluation = evaluate_run_quality(final_state, metrics_data)
             if metrics_data:
                 await session.execute(delete(MetricsModel).where(MetricsModel.task_id == task_id))
                 metrics = MetricsModel(
@@ -304,6 +345,8 @@ async def run_pipeline(task_id: str, *, resume: bool = False) -> None:
                     source_count=metrics_data.get("source_count", 0),
                     claim_count=metrics_data.get("claim_count", 0),
                     evidence_coverage_rate=metrics_data.get("evidence_coverage_rate", 0.0),
+                    quality_score=quality_evaluation["score"],
+                    quality_breakdown=jsonable_encoder(quality_evaluation),
                     manual_correction_count=task.manual_correction_count or 0,
                 )
                 session.add(metrics)
@@ -329,6 +372,8 @@ async def run_pipeline(task_id: str, *, resume: bool = False) -> None:
                 source_count=metrics_data.get("source_count", len(final_state.get("curated_sources") or final_state.get("sources", []))) if metrics_data else len(final_state.get("curated_sources") or final_state.get("sources", [])),
                 claim_count=metrics_data.get("claim_count", 0) if metrics_data else 0,
                 evidence_coverage_rate=metrics_data.get("evidence_coverage_rate", 0.0) if metrics_data else 0.0,
+                quality_score=quality_evaluation["score"],
+                quality_breakdown=jsonable_encoder(quality_evaluation),
                 manual_correction_count=task.manual_correction_count or 0,
                 qa_feedback=jsonable_encoder(final_state.get("qa_feedback", {}) or {}),
                 handoff=jsonable_encoder(final_state.get("handoff", {}) or {}),

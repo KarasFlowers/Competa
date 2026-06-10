@@ -178,6 +178,7 @@ export default function TaskCreate() {
   const [customerContext, setCustomerContext] = useState("");
   const [mustAnswerQuestions, setMustAnswerQuestions] = useState("");
   const [ourContext, setOurContext] = useState("");
+  const [humanReviewRequired, setHumanReviewRequired] = useState(false);
   const [selectedFocusAreas, setSelectedFocusAreas] = useState<string[]>([
     "功能能力",
     "定价与包装",
@@ -260,6 +261,7 @@ export default function TaskCreate() {
         competitors: competitorPayload,
         focus_areas: normalizedFocusAreas,
         our_product_notes: briefPreview,
+        human_review_required: humanReviewRequired,
       });
 
       toast("任务已创建。建议先检查 brief，再启动分析。", "success");
@@ -589,6 +591,23 @@ export default function TaskCreate() {
                 className="mt-2 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm leading-6 text-gray-900 outline-none transition-colors placeholder:text-gray-400 focus:border-cyan-300 focus:bg-white"
               />
             </label>
+
+            <label className="mt-5 flex items-start gap-3 rounded-2xl border border-cyan-100 bg-cyan-50/60 p-4">
+              <input
+                type="checkbox"
+                checked={humanReviewRequired}
+                onChange={(event) => setHumanReviewRequired(event.target.checked)}
+                className="mt-1 h-4 w-4 rounded border-gray-300 text-cyan-600 focus:ring-cyan-500"
+              />
+              <span>
+                <span className="block text-sm font-medium text-cyan-950">
+                  分析完成后先暂停，由我确认方向再写报告
+                </span>
+                <span className="mt-1 block text-xs leading-5 text-cyan-900/75">
+                  适合高风险竞品分析或答辩演示：系统会先完成结构化分析，等待你补充写作约束后再继续生成报告。
+                </span>
+              </span>
+            </label>
           </section>
 
           <div className="flex flex-col gap-3 sm:flex-row">
@@ -623,6 +642,7 @@ export default function TaskCreate() {
               <SummaryTile label="关键问题" value={String(questionItems.length)} />
               <SummaryTile label="重点维度" value={String(normalizedFocusAreas.length)} />
               <SummaryTile label="主目标" value={goalTitle || "-"} />
+              <SummaryTile label="人工确认" value={humanReviewRequired ? "开启" : "关闭"} />
             </div>
           </div>
 
