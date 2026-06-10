@@ -57,6 +57,10 @@ coverage/
 
 # 现有项目文件（不纳入版本控制）
 介绍文档.txt
+功能文档.txt
+提交文档参考.md
+【AI 全栈项目挑战赛】项目成果提交-Competa.md
+docs/
 
 # Backend 特定
 backend/.pytest_cache/
