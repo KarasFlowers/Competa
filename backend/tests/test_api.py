@@ -1,5 +1,6 @@
 """Tests for the FastAPI endpoints."""
 
+import asyncio
 from datetime import datetime, timedelta
 
 from httpx import AsyncClient
@@ -19,7 +20,7 @@ from app.models.database import (
 from tests.conftest import TestSession
 
 
-async def _noop_run_pipeline(task_id: str) -> None:
+async def _noop_run_pipeline(task_id: str, *, resume: bool = False) -> None:
     return None
 
 
@@ -427,6 +428,40 @@ class TestRunAndStatus:
 
         resp = await client.post(f"/api/tasks/{task_id}/run")
         assert resp.status_code == 409
+
+    async def test_failed_task_run_resumes_checkpoint_without_purging_context(self, client: AsyncClient, monkeypatch):
+        captured: dict[str, bool] = {}
+
+        async def _capture_run_pipeline(task_id: str, *, resume: bool = False) -> None:
+            captured["resume"] = resume
+
+        monkeypatch.setattr("app.api.tasks.run_pipeline", _capture_run_pipeline)
+        resp = await client.post("/api/tasks", json={"target_product": "ResumeFailed"})
+        task_id = resp.json()["id"]
+
+        async with TestSession() as session:
+            task = await session.get(TaskModel, task_id)
+            task.status = "failed"
+            task.last_qa_feedback = {"passed": False}
+            session.add_all([
+                SourceModel(task_id=task_id, title="Keep Source", content_snippet="keep"),
+                ConstraintModel(task_id=task_id, constraint_type="human", constraint_value="keep-constraint"),
+            ])
+            await session.commit()
+
+        resp = await client.post(f"/api/tasks/{task_id}/run")
+        await asyncio.sleep(0)
+        assert resp.status_code == 202
+        assert captured["resume"] is True
+
+        async with TestSession() as session:
+            source = await session.execute(SourceModel.__table__.select().where(SourceModel.task_id == task_id))
+            constraint = await session.execute(ConstraintModel.__table__.select().where(ConstraintModel.task_id == task_id))
+            task = await session.get(TaskModel, task_id)
+
+        assert task.status == "collecting"
+        assert source.first() is not None
+        assert constraint.first() is not None
 
     async def test_completed_task_can_run_again_and_purges_old_artifacts(self, client: AsyncClient, monkeypatch):
         monkeypatch.setattr("app.api.tasks.run_pipeline", _noop_run_pipeline)

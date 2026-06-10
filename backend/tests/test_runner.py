@@ -1,9 +1,11 @@
 """Tests for task runner lifecycle persistence."""
 
 import pytest
+from langgraph.graph import END, StateGraph
 
 from app.models.database import MetricsModel, ReportModel, RunHistoryModel, SourceModel, TaskModel, TraceModel
 from app.orchestration import runner
+from app.orchestration.state import PipelineState
 from tests.conftest import TestSession
 
 
@@ -129,6 +131,71 @@ class FailingGraph:
         raise RuntimeError("pipeline boom")
 
 
+def build_resumable_test_graph(calls: dict[str, int]) -> StateGraph:
+    graph = StateGraph(PipelineState)
+
+    async def collect(state: PipelineState) -> dict:
+        calls["collect"] += 1
+        return {
+            "sources": [
+                {
+                    "id": "src-resume",
+                    "type": "url",
+                    "url": "https://example.com/resume",
+                    "title": "Resume Source",
+                    "content_snippet": "resume snippet",
+                    "reliability_score": 0.9,
+                    "included_in_analysis": True,
+                    "curation_reason": "selected",
+                    "curation_tags": ["high_confidence"],
+                    "curated_excerpt": "Resume Source: resume snippet",
+                }
+            ],
+            "curated_sources": [
+                {
+                    "id": "src-resume",
+                    "type": "url",
+                    "url": "https://example.com/resume",
+                    "title": "Resume Source",
+                    "content_snippet": "resume snippet",
+                    "reliability_score": 0.9,
+                    "included_in_analysis": True,
+                    "curation_reason": "selected",
+                    "curation_tags": ["high_confidence"],
+                    "curated_excerpt": "Resume Source: resume snippet",
+                }
+            ],
+            "traces": [{"agent_name": "collector", "event_type": "output", "token_count": 4}],
+            "status": "writing",
+        }
+
+    async def write(state: PipelineState) -> dict:
+        calls["write"] += 1
+        if calls["write"] == 1:
+            raise RuntimeError("writer interrupted")
+        traces = state.get("traces", []) + [
+            {"agent_name": "writer", "event_type": "output", "token_count": 6}
+        ]
+        return {
+            "report": {"title": "Resumed Report", "sections": []},
+            "qa_feedback": {"passed": True},
+            "metrics": {
+                "source_count": 1,
+                "claim_count": 1,
+                "evidence_coverage_rate": 1.0,
+            },
+            "traces": traces,
+            "status": "completed",
+        }
+
+    graph.add_node("collect", collect)
+    graph.add_node("write", write)
+    graph.set_entry_point("collect")
+    graph.add_edge("collect", "write")
+    graph.add_edge("write", END)
+    return graph
+
+
 @pytest.mark.asyncio
 async def test_run_pipeline_persists_intermediate_statuses(monkeypatch):
     observed_statuses: list[str] = []
@@ -206,3 +273,40 @@ async def test_run_pipeline_marks_failure_and_persists_failed_trace(monkeypatch)
     assert trace is not None
     assert trace.status == "failed"
     assert trace.events[-1]["error_message"] == "pipeline boom"
+
+
+@pytest.mark.asyncio
+async def test_run_pipeline_resumes_from_sqlite_checkpoint(monkeypatch, tmp_path):
+    calls = {"collect": 0, "write": 0}
+    monkeypatch.setattr(runner, "async_session", TestSession)
+    monkeypatch.setattr(runner, "build_graph", lambda: build_resumable_test_graph(calls))
+    monkeypatch.setattr(runner, "_checkpoint_conn_string", lambda: str(tmp_path / "checkpoints.db"))
+
+    async with TestSession() as session:
+        task = TaskModel(target_product="RunnerResume", status="collecting")
+        session.add(task)
+        await session.commit()
+        await session.refresh(task)
+        task_id = task.id
+
+    await runner.run_pipeline(task_id, resume=False)
+
+    async with TestSession() as session:
+        task = await session.get(TaskModel, task_id)
+    assert task.status == "failed"
+    assert calls == {"collect": 1, "write": 1}
+
+    await runner.run_pipeline(task_id, resume=True)
+
+    async with TestSession() as session:
+        task = await session.get(TaskModel, task_id)
+        source = (await session.execute(SourceModel.__table__.select().where(SourceModel.task_id == task_id))).first()
+        report = (await session.execute(ReportModel.__table__.select().where(ReportModel.task_id == task_id))).first()
+        metrics = (await session.execute(MetricsModel.__table__.select().where(MetricsModel.task_id == task_id))).first()
+
+    assert calls == {"collect": 1, "write": 2}
+    assert task.status == "completed"
+    assert task.last_qa_feedback == {"passed": True}
+    assert source is not None
+    assert report is not None
+    assert metrics is not None

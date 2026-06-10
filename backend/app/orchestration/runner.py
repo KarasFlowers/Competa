@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import AsyncIterator
+from pathlib import Path
 
 from fastapi.encoders import jsonable_encoder
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
+from app.config import settings
 from app.db.session import async_session
 from app.guardrails.redact import safe_error_message
 from app.models.database import (
@@ -21,12 +25,72 @@ from app.models.database import (
     TaskModel,
     TraceModel,
 )
-from app.orchestration.graph import pipeline_graph
+from app.orchestration.graph import build_graph, pipeline_graph
 from app.orchestration.state import PipelineState
 from app.schemas.trace import EventType, TraceEvent
+from sqlalchemy.engine import make_url
 from sqlalchemy import delete, select
 
 logger = logging.getLogger(__name__)
+_DEFAULT_PIPELINE_GRAPH = pipeline_graph
+
+
+def _checkpoint_thread_id(task_id: str) -> str:
+    return f"pipeline:{task_id}"
+
+
+def _checkpoint_config(task_id: str) -> dict:
+    return {"configurable": {"thread_id": _checkpoint_thread_id(task_id)}}
+
+
+def _checkpoint_conn_string() -> str:
+    """Derive the SQLite checkpoint file from the configured application DB."""
+    url = make_url(settings.DATABASE_URL)
+    if not url.drivername.startswith("sqlite"):
+        return "competa_checkpoints.db"
+
+    database = url.database or ":memory:"
+    if database == ":memory:":
+        return database
+
+    return str(Path(database))
+
+
+async def _stream_pipeline_updates(
+    initial_state: PipelineState,
+    *,
+    resume: bool,
+    final_state: PipelineState,
+) -> AsyncIterator[dict]:
+    """Stream graph updates, using SQLite checkpoints for the production graph."""
+    if pipeline_graph is not _DEFAULT_PIPELINE_GRAPH:
+        async for chunk in pipeline_graph.astream(initial_state, stream_mode="updates"):
+            yield chunk
+        return
+
+    task_id = initial_state["task_id"]
+    config = _checkpoint_config(task_id)
+
+    async with AsyncSqliteSaver.from_conn_string(_checkpoint_conn_string()) as checkpointer:
+        await checkpointer.setup()
+        graph = build_graph().compile(checkpointer=checkpointer)
+
+        checkpoint = await checkpointer.aget_tuple(config)
+        if not resume:
+            await checkpointer.adelete_thread(_checkpoint_thread_id(task_id))
+            checkpoint = None
+
+        if resume and checkpoint is not None:
+            logger.info("Resuming pipeline for task %s from LangGraph checkpoint", task_id)
+            snapshot = await graph.aget_state(config)
+            if snapshot.values:
+                final_state.update(snapshot.values)
+            graph_input = None
+        else:
+            graph_input = initial_state
+
+        async for chunk in graph.astream(graph_input, config=config, stream_mode="updates"):
+            yield chunk
 
 
 async def _next_run_index(session, task_id: str) -> int:
@@ -70,7 +134,7 @@ def _serialize_trace_events(trace_events: list[dict]) -> list[dict]:
     return jsonable_encoder(trace_events)
 
 
-async def run_pipeline(task_id: str) -> None:
+async def run_pipeline(task_id: str, *, resume: bool = False) -> None:
     """Execute the full pipeline for a task.
 
     Loads task from DB, runs LangGraph DAG, and persists
@@ -140,7 +204,11 @@ async def run_pipeline(task_id: str) -> None:
             final_state: PipelineState = dict(initial_state)
 
             # Run the graph and persist intermediate statuses as each node finishes.
-            async for chunk in pipeline_graph.astream(initial_state, stream_mode="updates"):
+            async for chunk in _stream_pipeline_updates(
+                initial_state,
+                resume=resume,
+                final_state=final_state,
+            ):
                 _merge_state_update(final_state, chunk)
                 next_status = final_state.get("status")
                 if next_status and task.status != next_status:
