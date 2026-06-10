@@ -30,6 +30,7 @@ async def _migrate_add_columns(conn) -> None:
         ("tasks", "our_product_notes", "TEXT DEFAULT ''"),
         ("tasks", "focus_areas", "JSON DEFAULT '[]'"),
         ("tasks", "target_website", "TEXT DEFAULT ''"),
+        ("tasks", "human_review_required", "BOOLEAN DEFAULT 0"),
         ("tasks", "manual_correction_count", "INTEGER DEFAULT 0"),
         ("tasks", "last_qa_feedback", "JSON DEFAULT '{}'"),
         ("tasks", "last_handoff", "JSON DEFAULT '{}'"),
@@ -39,6 +40,10 @@ async def _migrate_add_columns(conn) -> None:
         ("sources", "curation_reason", "TEXT DEFAULT ''"),
         ("sources", "curation_tags", "JSON DEFAULT '[]'"),
         ("sources", "curated_excerpt", "TEXT DEFAULT ''"),
+        ("metrics", "quality_score", "FLOAT DEFAULT 0.0"),
+        ("metrics", "quality_breakdown", "JSON DEFAULT '{}'"),
+        ("run_history", "quality_score", "FLOAT DEFAULT 0.0"),
+        ("run_history", "quality_breakdown", "JSON DEFAULT '{}'"),
         ("run_history", "curation_summary", "JSON DEFAULT '{}'"),
     ]
     for table, column, col_type in migrations:

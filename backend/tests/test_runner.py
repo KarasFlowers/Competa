@@ -131,7 +131,9 @@ class FailingGraph:
         raise RuntimeError("pipeline boom")
 
 
-def build_resumable_test_graph(calls: dict[str, int]) -> StateGraph:
+def build_resumable_test_graph(
+    calls: dict[str, int], *, fail_first_write: bool = True
+) -> StateGraph:
     graph = StateGraph(PipelineState)
 
     async def collect(state: PipelineState) -> dict:
@@ -171,13 +173,17 @@ def build_resumable_test_graph(calls: dict[str, int]) -> StateGraph:
 
     async def write(state: PipelineState) -> dict:
         calls["write"] += 1
-        if calls["write"] == 1:
+        if fail_first_write and calls["write"] == 1:
             raise RuntimeError("writer interrupted")
         traces = state.get("traces", []) + [
             {"agent_name": "writer", "event_type": "output", "token_count": 6}
         ]
         return {
-            "report": {"title": "Resumed Report", "sections": []},
+            "report": {
+                "title": "Resumed Report",
+                "sections": [],
+                "constraints_seen": state.get("constraints", []),
+            },
             "qa_feedback": {"passed": True},
             "metrics": {
                 "source_count": 1,
@@ -242,8 +248,11 @@ async def test_run_pipeline_persists_intermediate_statuses(monkeypatch):
     assert traces.status == "completed"
     assert traces.total_tokens == 17
     assert metrics.manual_correction_count == 2
+    assert 0 < metrics.quality_score <= 1
+    assert metrics.quality_breakdown["components"]["evidence_coverage"] == 1.0
     assert run_history.run_index == 1
     assert run_history.evidence_coverage_rate == 1.0
+    assert run_history.quality_score == metrics.quality_score
     assert run_history.curation_summary["kept_count"] == 1
 
 
@@ -310,3 +319,56 @@ async def test_run_pipeline_resumes_from_sqlite_checkpoint(monkeypatch, tmp_path
     assert source is not None
     assert report is not None
     assert metrics is not None
+    assert metrics.quality_score > 0
+
+
+@pytest.mark.asyncio
+async def test_run_pipeline_pauses_before_writer_for_human_review(monkeypatch, tmp_path):
+    calls = {"collect": 0, "write": 0}
+    monkeypatch.setattr(runner, "async_session", TestSession)
+    monkeypatch.setattr(
+        runner,
+        "build_graph",
+        lambda: build_resumable_test_graph(calls, fail_first_write=False),
+    )
+    monkeypatch.setattr(runner, "_checkpoint_conn_string", lambda: str(tmp_path / "review-checkpoints.db"))
+
+    async with TestSession() as session:
+        task = TaskModel(
+            target_product="RunnerReview",
+            status="collecting",
+            human_review_required=True,
+        )
+        session.add(task)
+        await session.commit()
+        await session.refresh(task)
+        task_id = task.id
+
+    await runner.run_pipeline(task_id, resume=False)
+
+    async with TestSession() as session:
+        task = await session.get(TaskModel, task_id)
+        source = (await session.execute(SourceModel.__table__.select().where(SourceModel.task_id == task_id))).first()
+        trace = (await session.execute(TraceModel.__table__.select().where(TraceModel.task_id == task_id))).first()
+        run_history = (await session.execute(RunHistoryModel.__table__.select().where(RunHistoryModel.task_id == task_id))).first()
+
+    assert calls == {"collect": 1, "write": 0}
+    assert task.status == "awaiting_review"
+    assert task.last_handoff["target_agent"] == "writer"
+    assert source is not None
+    assert trace.status == "paused"
+    assert run_history is None
+
+    await runner.run_pipeline(
+        task_id,
+        resume=True,
+        state_overrides={"constraints": ["CONSTRAINT: emphasize governance"]},
+    )
+
+    async with TestSession() as session:
+        task = await session.get(TaskModel, task_id)
+        report = (await session.execute(ReportModel.__table__.select().where(ReportModel.task_id == task_id))).first()
+
+    assert calls == {"collect": 1, "write": 1}
+    assert task.status == "completed"
+    assert "CONSTRAINT: emphasize governance" in report.content["constraints_seen"]

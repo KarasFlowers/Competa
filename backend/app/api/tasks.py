@@ -96,6 +96,7 @@ class TaskCreate(BaseModel):
     competitors: list[str | CompetitorInput] = Field(default_factory=list)
     focus_areas: list[str] = Field(default_factory=list)
     our_product_notes: str = ""  # context about our own product
+    human_review_required: bool = False
 
 
 class TaskResponse(BaseModel):
@@ -106,6 +107,7 @@ class TaskResponse(BaseModel):
     competitors: list[str | CompetitorInput]
     focus_areas: list[str] = Field(default_factory=list)
     our_product_notes: str = ""
+    human_review_required: bool = False
     manual_correction_count: int = 0
     last_qa_feedback: dict = Field(default_factory=dict)
     last_handoff: dict = Field(default_factory=dict)
@@ -129,6 +131,8 @@ class TaskMetricsSummary(BaseModel):
     source_count: int
     claim_count: int
     evidence_coverage_rate: float
+    quality_score: float = 0.0
+    quality_breakdown: dict = Field(default_factory=dict)
     manual_correction_count: int
 
 
@@ -140,6 +144,7 @@ class TaskOverviewItem(BaseModel):
     competitors: list[str | CompetitorInput]
     focus_areas: list[str] = Field(default_factory=list)
     our_product_notes: str = ""
+    human_review_required: bool = False
     status: str
     created_at: datetime
     updated_at: datetime
@@ -154,10 +159,12 @@ class TaskOverviewItem(BaseModel):
 class TaskOverviewStats(BaseModel):
     total_tasks: int
     active_tasks: int
+    review_tasks: int
     completed_tasks: int
     failed_tasks: int
     reports_ready: int
     avg_evidence_coverage: float | None = None
+    avg_quality_score: float | None = None
     status_counts: dict[str, int]
 
 
@@ -206,6 +213,7 @@ async def create_task(body: TaskCreate, session: AsyncSession = Depends(get_sess
         competitors=competitors_data,
         focus_areas=_normalize_focus_areas(body.focus_areas),
         our_product_notes=body.our_product_notes,
+        human_review_required=body.human_review_required,
     )
     session.add(task)
     await session.commit()
@@ -236,6 +244,7 @@ async def get_tasks_overview(session: AsyncSession = Depends(get_session)):
     items: list[TaskOverviewItem] = []
     status_counts: dict[str, int] = {}
     coverage_values: list[float] = []
+    quality_values: list[float] = []
 
     for task in tasks:
         status_counts[task.status] = status_counts.get(task.status, 0) + 1
@@ -243,11 +252,15 @@ async def get_tasks_overview(session: AsyncSession = Depends(get_session)):
         metrics_summary = None
         if metrics_row:
             coverage = float(metrics_row.evidence_coverage_rate)
+            quality_score = float(metrics_row.quality_score or 0.0)
             coverage_values.append(coverage)
+            quality_values.append(quality_score)
             metrics_summary = TaskMetricsSummary(
                 source_count=metrics_row.source_count,
                 claim_count=metrics_row.claim_count,
                 evidence_coverage_rate=coverage,
+                quality_score=quality_score,
+                quality_breakdown=metrics_row.quality_breakdown or {},
                 manual_correction_count=metrics_row.manual_correction_count,
             )
 
@@ -260,6 +273,7 @@ async def get_tasks_overview(session: AsyncSession = Depends(get_session)):
                 competitors=task.competitors or [],
                 focus_areas=task.focus_areas or [],
                 our_product_notes=task.our_product_notes or "",
+                human_review_required=bool(task.human_review_required),
                 status=task.status,
                 created_at=task.created_at,
                 updated_at=task.updated_at,
@@ -281,12 +295,18 @@ async def get_tasks_overview(session: AsyncSession = Depends(get_session)):
     stats = TaskOverviewStats(
         total_tasks=len(tasks),
         active_tasks=sum(1 for task in tasks if task.status in ACTIVE_TASK_STATUSES),
+        review_tasks=sum(1 for task in tasks if task.status == "awaiting_review"),
         completed_tasks=sum(1 for task in tasks if task.status == "completed"),
         failed_tasks=sum(1 for task in tasks if task.status == "failed"),
         reports_ready=sum(1 for task in tasks if task.id in report_ids),
         avg_evidence_coverage=(
             round(sum(coverage_values) / len(coverage_values), 4)
             if coverage_values
+            else None
+        ),
+        avg_quality_score=(
+            round(sum(quality_values) / len(quality_values), 4)
+            if quality_values
             else None
         ),
         status_counts=status_counts,
@@ -382,6 +402,59 @@ async def get_task_status(task_id: str, session: AsyncSession = Depends(get_sess
     return task
 
 
+class ContinueReviewRequest(BaseModel):
+    instruction: str = ""
+
+
+@router.post("/{task_id}/continue", status_code=202)
+async def continue_after_review(
+    task_id: str,
+    body: ContinueReviewRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    task = await session.get(TaskModel, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.status != "awaiting_review":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Task is in '{task.status}' state, cannot continue review",
+        )
+
+    existing_cons = await session.execute(
+        select(ConstraintModel).where(ConstraintModel.task_id == task_id)
+    )
+    constraints = [c.constraint_value for c in existing_cons.scalars().all()]
+    instruction = body.instruction.strip()
+    if instruction:
+        constraint_value = f"CONSTRAINT: human review before writing - {instruction}"
+        session.add(ConstraintModel(
+            task_id=task_id,
+            constraint_type="human_review",
+            constraint_value=constraint_value,
+            applied_to="writer",
+        ))
+        constraints.append(constraint_value)
+        task.manual_correction_count += 1
+
+    task.status = "writing"
+    task.updated_at = datetime.now(UTC)
+    await session.commit()
+
+    async def _safe_run():
+        try:
+            await run_pipeline(
+                task_id,
+                resume=True,
+                state_overrides={"constraints": constraints},
+            )
+        except Exception:
+            logger.exception("Background review continuation failed for task %s", task_id)
+
+    _create_tracked_task(_safe_run())
+    return {"message": "Pipeline continued", "task_id": task_id}
+
+
 # ---------------------------------------------------------------------------
 # Human correction endpoints
 # ---------------------------------------------------------------------------
@@ -414,6 +487,8 @@ class RunHistorySummary(BaseModel):
     source_count: int
     claim_count: int
     evidence_coverage_rate: float
+    quality_score: float = 0.0
+    quality_breakdown: dict = Field(default_factory=dict)
     manual_correction_count: int
     created_at: datetime
     qa_feedback: dict = Field(default_factory=dict)
@@ -426,6 +501,7 @@ class RunHistoryDelta(BaseModel):
     source_count_delta: int
     claim_count_delta: int
     evidence_coverage_delta: float
+    quality_score_delta: float
     retry_count_delta: int
     manual_correction_delta: int
 
@@ -565,6 +641,7 @@ async def compare_latest_runs(task_id: str, session: AsyncSession = Depends(get_
             source_count_delta=current.source_count - previous.source_count,
             claim_count_delta=current.claim_count - previous.claim_count,
             evidence_coverage_delta=round(current.evidence_coverage_rate - previous.evidence_coverage_rate, 4),
+            quality_score_delta=round((current.quality_score or 0.0) - (previous.quality_score or 0.0), 4),
             retry_count_delta=current.retry_count - previous.retry_count,
             manual_correction_delta=current.manual_correction_count - previous.manual_correction_count,
         )
