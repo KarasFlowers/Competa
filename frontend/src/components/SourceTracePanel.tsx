@@ -3,6 +3,19 @@ import { X, ExternalLink, Link2, ShieldCheck } from "lucide-react";
 import type { Source, Claim } from "../api/client";
 import { ReliabilityBadge } from "./ReliabilityBadge";
 
+const CURATION_REASON_LABELS: Record<string, string> = {
+  selected: "已纳入分析",
+  duplicate_url: "重复 URL",
+  duplicate_content: "重复内容",
+  low_reliability: "低可信度",
+  domain_cap: "单域名来源过多",
+  max_source_cap: "超过来源上限",
+};
+
+function getCurationReasonLabel(reason: string) {
+  return CURATION_REASON_LABELS[reason] ?? reason.replace(/_/g, " ");
+}
+
 interface SourceTracePanelProps {
   source: Source;
   claims: Claim[];
@@ -21,6 +34,7 @@ export default function SourceTracePanel({ source, claims, onClose }: SourceTrac
   const citingClaims = claims.filter((c) =>
     c.evidence_ids?.includes(source.id)
   );
+  const excerpt = source.curated_excerpt?.trim() || source.content_snippet?.trim() || "";
 
   return (
     <div
@@ -55,7 +69,31 @@ export default function SourceTracePanel({ source, claims, onClose }: SourceTrac
             {source.reliability_score !== undefined && (
               <ReliabilityBadge score={source.reliability_score} />
             )}
+            <span
+              className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                source.included_in_analysis ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"
+              }`}
+            >
+              {source.included_in_analysis ? "已纳入分析" : "未纳入分析"}
+            </span>
           </div>
+
+          {source.curation_reason && (
+            <div className="rounded-lg bg-gray-50 p-3 text-xs text-gray-700">
+              <div className="font-medium text-gray-900">筛选判断</div>
+              <div className="mt-1">{getCurationReasonLabel(source.curation_reason)}</div>
+            </div>
+          )}
+
+          {source.curation_tags?.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {source.curation_tags.slice(0, 5).map((tag) => (
+                <span key={tag} className="rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700">
+                  {tag}
+                </span>
+              ))}
+            </div>
+          )}
 
           {source.url && (
             <a
@@ -69,9 +107,9 @@ export default function SourceTracePanel({ source, claims, onClose }: SourceTrac
             </a>
           )}
 
-          {source.content_snippet && (
+          {excerpt && (
             <div className="bg-gray-50 rounded-lg p-3 text-xs text-gray-700 leading-relaxed whitespace-pre-wrap">
-              {source.content_snippet}
+              {excerpt}
             </div>
           )}
 

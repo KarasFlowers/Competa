@@ -19,4 +19,16 @@ export default defineConfig({
       },
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes("@xyflow/react") || id.includes("@dagrejs/dagre")) {
+            return "flow-vendor";
+          }
+          return undefined;
+        },
+      },
+    },
+  },
 });

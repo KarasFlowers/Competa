@@ -4,6 +4,7 @@ import {
   Activity,
   ArrowRight,
   ClipboardList,
+  ExternalLink,
   FileSearch,
   FileText,
   FolderKanban,
@@ -19,6 +20,7 @@ const ACTIVE_STATUSES = new Set([
   "surveying",
   "interviewing",
   "fieldwork",
+  "curating",
   "analyzing",
   "writing",
   "screenshotting",
@@ -33,6 +35,7 @@ const STATUS_META: Record<string, { label: string; className: string }> = {
   surveying: { label: "问卷设计中", className: "bg-cyan-100 text-cyan-700" },
   interviewing: { label: "访谈设计中", className: "bg-teal-100 text-teal-700" },
   fieldwork: { label: "调研执行中", className: "bg-emerald-100 text-emerald-700" },
+  curating: { label: "证据筛选中", className: "bg-sky-100 text-sky-700" },
   analyzing: { label: "分析中", className: "bg-indigo-100 text-indigo-700" },
   writing: { label: "写作中", className: "bg-purple-100 text-purple-700" },
   screenshotting: { label: "截图处理中", className: "bg-fuchsia-100 text-fuchsia-700" },
@@ -49,6 +52,7 @@ const STATUS_ORDER = [
   "surveying",
   "interviewing",
   "fieldwork",
+  "curating",
   "analyzing",
   "writing",
   "screenshotting",
@@ -81,18 +85,36 @@ function formatTime(value: string) {
   return new Date(value).toLocaleString();
 }
 
+function formatWebsiteLabel(url: string) {
+  return url.replace(/^https?:\/\//i, "").replace(/\/$/, "");
+}
+
+function formatBriefPreview(value: string | null | undefined) {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  const normalized = trimmed.replace(/\n{3,}/g, "\n\n");
+  if (normalized.length <= 220) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, 220).trimEnd()}...`;
+}
+
 function TaskMetricsStrip({ task }: { task: TaskOverviewItem }) {
   if (!task.metrics) {
     return (
       <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-500">
-        当前还没有质量指标，任务运行后会在这里展示证据覆盖率与来源数量。
+        当前还没有质量指标，任务运行后会在这里展示证据覆盖率与纳入分析的证据数量。
       </div>
     );
   }
 
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-      <MetricTile label="来源" value={task.metrics.source_count.toString()} />
+      <MetricTile label="分析证据" value={task.metrics.source_count.toString()} />
       <MetricTile label="结论" value={task.metrics.claim_count.toString()} />
       <MetricTile label="覆盖率" value={formatCoverage(task.metrics.evidence_coverage_rate)} />
       <MetricTile label="人工修正" value={task.metrics.manual_correction_count.toString()} />
@@ -169,7 +191,12 @@ function ArtifactLinks({ task }: { task: TaskOverviewItem }) {
 function TaskCard({ task }: { task: TaskOverviewItem }) {
   const statusMeta = getStatusMeta(task.status);
   const competitorNames = task.competitors.map(getCompetitorName).filter(Boolean);
-  const notePreview = task.our_product_notes?.trim();
+  const notePreview = formatBriefPreview(task.our_product_notes);
+  const focusAreas = task.focus_areas?.filter(Boolean) ?? [];
+  const qaPassed = task.last_qa_feedback?.passed === true;
+  const hasQaResult = task.last_qa_feedback && Object.keys(task.last_qa_feedback).length > 0;
+  const curationSummary = task.last_curation_summary ?? {};
+  const hasCurationSummary = Object.keys(curationSummary).length > 0;
 
   return (
     <article className="rounded-3xl border border-gray-200 bg-white p-6 shadow-sm transition-shadow hover:shadow-md">
@@ -189,6 +216,18 @@ function TaskCard({ task }: { task: TaskOverviewItem }) {
           <div className="text-sm text-gray-500">
             {task.industry || "未填写行业"} · {competitorNames.length} 个竞品 · 最近更新 {formatTime(task.updated_at)}
           </div>
+          {task.target_website ? (
+            <a
+              href={task.target_website}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={task.target_website}
+              className="inline-flex max-w-full items-center gap-2 rounded-full border border-cyan-100 bg-cyan-50 px-3 py-1 text-xs font-medium text-cyan-700 transition-colors hover:border-cyan-200 hover:bg-cyan-100"
+            >
+              <ExternalLink className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">目标官网：{formatWebsiteLabel(task.target_website)}</span>
+            </a>
+          ) : null}
         </div>
 
         <Link
@@ -223,15 +262,40 @@ function TaskCard({ task }: { task: TaskOverviewItem }) {
       </div>
 
       {notePreview ? (
-        <div className="mt-5 rounded-2xl border border-blue-100 bg-blue-50/70 px-4 py-3 text-sm leading-6 text-gray-700">
-          <span className="font-medium text-blue-900">我方产品备注：</span>
+        <div className="mt-5 whitespace-pre-line rounded-2xl border border-blue-100 bg-blue-50/70 px-4 py-3 text-sm leading-6 text-gray-700">
+          <span className="font-medium text-blue-900">研究 brief：</span>
           {notePreview}
+        </div>
+      ) : null}
+
+      {focusAreas.length > 0 ? (
+        <div className="mt-5 flex flex-wrap gap-2">
+          {focusAreas.slice(0, 5).map((area) => (
+            <span key={area} className="rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
+              {area}
+            </span>
+          ))}
         </div>
       ) : null}
 
       <div className="mt-5">
         <TaskMetricsStrip task={task} />
       </div>
+
+      {hasCurationSummary ? (
+        <div className="mt-4 rounded-2xl bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+          最近一次证据筛选纳入 {curationSummary.kept_count ?? 0}/{curationSummary.input_count ?? 0} 条来源。
+        </div>
+      ) : null}
+
+      {hasQaResult ? (
+        <div className={`mt-5 rounded-2xl px-4 py-3 text-sm ${
+          qaPassed ? "bg-green-50 text-green-700" : "bg-amber-50 text-amber-700"
+        }`}>
+          {qaPassed ? "最近一次 QA 已通过。" : `最近一次 QA 发现 ${(task.last_qa_feedback.issues as unknown[] | undefined)?.length ?? 0} 个问题。`}
+          {task.manual_correction_count > 0 ? ` 已进行 ${task.manual_correction_count} 次人工修正。` : ""}
+        </div>
+      ) : null}
 
       <div className="mt-5 border-t border-gray-100 pt-5">
         <ArtifactLinks task={task} />
@@ -304,6 +368,7 @@ export default function TasksWorkspace() {
 
     const searchableText = [
       task.target_product,
+      task.target_website,
       task.industry,
       task.our_product_notes,
       ...task.competitors.map(getCompetitorName),
@@ -423,7 +488,7 @@ export default function TasksWorkspace() {
               type="search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="搜索任务名、行业、竞品或我方备注"
+              placeholder="搜索任务名、官网、行业、竞品或研究 brief"
               className="w-full rounded-2xl border border-gray-200 bg-gray-50 py-3 pl-11 pr-4 text-sm text-gray-900 outline-none transition-colors placeholder:text-gray-400 focus:border-blue-300 focus:bg-white"
             />
           </div>

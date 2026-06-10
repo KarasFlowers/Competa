@@ -28,12 +28,14 @@ class FieldworkAgent(BaseAgent):
             - survey: dict (SurveyOutput, optional)
             - interview: dict (InterviewGuideOutput, optional)
             - personas: list[dict] (from analysis, optional)
+            - our_product_notes: str (optional)
         """
         target_product = input_data.get("target_product", "")
         competitors = input_data.get("competitors", [])
         survey = input_data.get("survey") or {}
         interview = input_data.get("interview") or {}
         personas = input_data.get("personas") or []
+        our_product_notes = input_data.get("our_product_notes", "")
 
         competitor_names = [
             c.get("name", str(c)) if isinstance(c, dict) else c
@@ -46,6 +48,7 @@ class FieldworkAgent(BaseAgent):
             survey=survey,
             interview=interview,
             personas=personas,
+            our_product_notes=our_product_notes,
         )
 
         validated, llm_resp, traces = await self.call_and_validate(

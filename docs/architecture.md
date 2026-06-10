@@ -2,44 +2,39 @@
 
 ## 1. 系统总览
 
-Competa 是一个多 Agent 协作的 AI 竞品分析系统，核心流程为"信息采集 → 结构化分析 → 报告撰写 → 质检反馈 → 报告输出"，具备真实反馈闭环和信息溯源能力。
+Competa 是一个多 Agent 协作的 AI 竞品分析系统，核心流程为"信息采集 → 调研设计 → 调研执行 → 证据筛选 → 结构化分析 → 报告撰写 → 质检反馈 → 报告输出"，具备真实反馈闭环、信息溯源和可解释证据筛选能力。
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                         FastAPI Backend                         │
 │                                                                 │
-│  ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐   │
-│  │ Collector │──▶│ Analyst  │──▶│  Writer  │──▶│  Filter  │   │
-│  │  Agent    │   │  Agent   │   │  Agent   │   │   Node   │   │
-│  └──────────┘   └──────────┘   └──────────┘   └────┬─────┘   │
-│       ▲                                             │          │
-│       │              ┌──────────┐                   ▼          │
-│       └──────────────│    QA    │◀────────────┌──────────┐   │
-│        (retry ≤ 2)   │  Agent   │─────────────│  END /   │   │
-│                      └──────────┘  passed?    │  Failed  │   │
-│                           │                   └──────────┘   │
-│                           ▼                                   │
-│                    qa_router                                  │
-│                    (conditional)                              │
+│  Collector → Survey → Interview → Fieldwork → Curator →     │
+│  Analyst → Writer → Screenshot → Filter → QA                │
+│        ▲                                              │       │
+│        └──────────── retry to collect/analyze/write ──┘       │
 │                                                                 │
 │  ┌─────────────────────────────────────────────────────────┐   │
 │  │                    PipelineState                         │   │
-│  │  task_id, task, sources, analysis, report, qa_feedback,  │   │
-│  │  metrics, previous_metrics, handoff, traces, status,     │   │
-│  │  error, retry_count, constraints                         │   │
+│  │  task_id, task, sources, curated_sources,                │   │
+│  │  curation_summary, survey, interview, fieldwork,         │   │
+│  │  analysis, report, qa_feedback, metrics,                 │   │
+│  │  previous_metrics, handoff, traces, status,              │   │
+│  │  error, retry_count, constraints, screenshot_paths       │   │
 │  └─────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                       SQLite Database                           │
-│  tasks │ sources │ reports │ traces │ constraints │ metrics     │
+│  tasks │ sources │ surveys │ interviews │ analyses │ reports     │
+│  traces │ constraints │ metrics │ run_history                   │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                      React Frontend                             │
-│  Landing │ TaskCreate │ TaskDetail │ ReportView (+ Source 溯源) │
+│  Landing │ DemoView │ TasksWorkspace │ TaskDetail │ ReportView   │
+│  TraceView │ SurveyView │ InterviewView                         │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -62,7 +57,7 @@ Competa 是一个多 Agent 协作的 AI 竞品分析系统，核心流程为"信
 流程定义在 `orchestration/graph.py`，使用 `StateGraph(PipelineState)` 构建：
 
 ```
-collect → survey → interview → fieldwork → analyze → write → screenshot → filter → qa → qa_router
+collect → survey → interview → fieldwork → curate → analyze → write → screenshot → filter → qa → qa_router
                                                                                         ├── passed → END
                                                                                         ├── retry_count > MAX_RETRIES → END (failed)
                                                                                         ├── retry_target == collector → collect
@@ -72,6 +67,7 @@ collect → survey → interview → fieldwork → analyze → write → screens
 
 - **MAX_RETRIES = 2**：最多打回 2 次
 - **qa_router**：确定性路由，由代码控制，LLM 只负责内容生成
+- **curate_node**：确定性证据筛选，负责去重、低质量筛除、域名限额与摘要标注
 - **filter_node**：过滤无 evidence_ids 的 Claim
 
 ## 4. 棘轮机制
@@ -122,17 +118,20 @@ schemas/
 
 ## 8. 数据库模型
 
-SQLite + SQLAlchemy async，6 张表：
+SQLite + SQLAlchemy async，当前主要包含 10 张表：
 
 | 表 | 说明 |
 |----|------|
 | `tasks` | 分析任务（目标产品、竞品、状态） |
 | `sources` | 数据来源（URL/文档/访谈/问卷） |
+| `surveys` | Survey Agent 生成的问卷设计 |
+| `interviews` | Interview Agent 生成的访谈提纲 |
 | `analyses` | 结构化竞品知识（功能树/定价/画像/SWOT），驱动对比矩阵与 SWOT 象限 |
 | `reports` | 结构化报告（JSON content） |
 | `traces` | Agent 执行追踪（JSON events） |
 | `constraints` | 棘轮约束记录 |
 | `metrics` | 业务 KPI（覆盖率、引用率等） |
+| `run_history` | 每次运行的快照、对比基线与筛选摘要 |
 
 > **分析产物落地**：Analyst Agent 产出的 `AnalyzeResult`（功能树/定价模型/用户画像/SWOT）由 `runner.py` 持久化到 `analyses` 表，并通过 `GET /tasks/{id}/analysis` 暴露。前端 `ComparisonMatrix` 组件据此渲染**功能对比矩阵**（竞品为列、功能为行，✓/部分/✗ 状态色块）、**定价对比**、**SWOT 四象限**（条目带 evidence 角标可溯源）与**用户画像卡片**——区别于 Writer 产出的叙述性报告。
 
@@ -141,6 +140,8 @@ SQLite + SQLAlchemy async，6 张表：
 RESTful API，前缀 `/api`：
 
 - 任务 CRUD + 运行控制（`POST /tasks/{id}/run`）
+- rerun / constraints / run_history / dag / analysis / survey / interview 查询
+- 报告导出（Markdown / Word）
 - 报告/来源/指标/追踪查询
 - 状态轮询（`GET /tasks/{id}/status`）
 
@@ -149,9 +150,10 @@ RESTful API，前缀 `/api`：
 React SPA，Vite 构建，TailwindCSS 样式：
 
 - `Layout` 组件提供导航栏
-- 4 个页面：Landing / TaskCreate / TaskDetail / ReportView
-- ReportView 支持引用标注点击 → Source 弹窗溯源
-- TaskDetail 支持状态轮询 + Metrics 展示
+- 路由级懒加载，重型可视化组件（`DagView` / `ComparisonMatrix`）按需加载
+- 页面覆盖 Landing / DemoView / TasksWorkspace / TaskCreate / TaskDetail / ReportView / TraceView / SurveyView / InterviewView
+- ReportView 支持引用标注点击 → Source 溯源面板，并区分已纳入分析与已筛除来源
+- TaskDetail 支持状态轮询、运行历史对比、证据筛选摘要与 rerun 控制
 
 ## 11. Reference 借鉴点
 

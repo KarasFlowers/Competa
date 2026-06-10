@@ -28,7 +28,18 @@ async def _migrate_add_columns(conn) -> None:
     """Add columns that may be missing from existing tables."""
     migrations = [
         ("tasks", "our_product_notes", "TEXT DEFAULT ''"),
+        ("tasks", "focus_areas", "JSON DEFAULT '[]'"),
+        ("tasks", "target_website", "TEXT DEFAULT ''"),
+        ("tasks", "manual_correction_count", "INTEGER DEFAULT 0"),
+        ("tasks", "last_qa_feedback", "JSON DEFAULT '{}'"),
+        ("tasks", "last_handoff", "JSON DEFAULT '{}'"),
+        ("tasks", "last_curation_summary", "JSON DEFAULT '{}'"),
         ("sources", "reliability_score", "FLOAT DEFAULT 0.5"),
+        ("sources", "included_in_analysis", "BOOLEAN DEFAULT 0"),
+        ("sources", "curation_reason", "TEXT DEFAULT ''"),
+        ("sources", "curation_tags", "JSON DEFAULT '[]'"),
+        ("sources", "curated_excerpt", "TEXT DEFAULT ''"),
+        ("run_history", "curation_summary", "JSON DEFAULT '{}'"),
     ]
     for table, column, col_type in migrations:
         try:

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import {
   taskApi,
@@ -6,16 +6,64 @@ import {
   sourceApi,
   analysisApi,
   type Report,
+  type ReportExportFormat,
   type Source,
   type ReportSection,
   type Claim,
   type AnalysisData,
+  type CurationSummary,
 } from "../api/client";
 import { Edit3, Download } from "lucide-react";
 import { useToast } from "../components/Toast";
 import { ReliabilityBadge } from "../components/ReliabilityBadge";
 import SourceTracePanel from "../components/SourceTracePanel";
-import ComparisonMatrix from "../components/ComparisonMatrix";
+
+const LazyComparisonMatrix = lazy(() => import("../components/ComparisonMatrix"));
+
+const CURATION_REASON_LABELS: Record<string, string> = {
+  selected: "已纳入分析",
+  duplicate_url: "重复 URL",
+  duplicate_content: "重复内容",
+  low_reliability: "低可信度",
+  domain_cap: "单域名来源过多",
+  max_source_cap: "超过来源上限",
+};
+
+function getCurationReasonLabel(reason: string) {
+  return CURATION_REASON_LABELS[reason] ?? reason.replace(/_/g, " ");
+}
+
+function hasCurationSummary(summary: CurationSummary | null | undefined) {
+  return Boolean(summary && Object.keys(summary).length > 0);
+}
+
+function hasCurationMetadata(source: Source) {
+  return Boolean(
+    source.included_in_analysis
+    || source.curation_reason
+    || source.curated_excerpt
+    || source.curation_tags?.length,
+  );
+}
+
+function formatReliability(score?: number) {
+  if (score === undefined) {
+    return "--";
+  }
+  return `${(score * 100).toFixed(0)}%`;
+}
+
+function getSourceExcerpt(source: Source) {
+  return source.curated_excerpt?.trim() || source.content_snippet?.trim() || "";
+}
+
+function SectionLoading({ label }: { label: string }) {
+  return (
+    <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 px-4 py-8 text-center text-sm text-gray-500">
+      {label}
+    </div>
+  );
+}
 
 export default function ReportView() {
   const { id } = useParams<{ id: string }>();
@@ -28,11 +76,16 @@ export default function ReportView() {
   const [error, setError] = useState("");
   const [editingClaim, setEditingClaim] = useState<Claim | null>(null);
   const [editedContent, setEditedContent] = useState("");
+  const [taskMeta, setTaskMeta] = useState<{
+    focus_areas: string[];
+    manual_correction_count: number;
+    last_curation_summary: CurationSummary;
+  } | null>(null);
   const { toast } = useToast();
 
-  const handleExport = (format: string) => {
+  const handleExport = (format: ReportExportFormat) => {
     if (!id) return;
-    window.open(`/api/reports/${id}/export?format=${format}`, "_blank");
+    window.open(reportApi.exportUrl(id, format), "_blank");
   };
 
   const refreshReport = () => {
@@ -43,6 +96,11 @@ export default function ReportView() {
   useEffect(() => {
     if (!id) return;
     refreshReport();
+    taskApi.get(id).then((r) => setTaskMeta({
+      focus_areas: r.data.focus_areas ?? [],
+      manual_correction_count: r.data.manual_correction_count ?? 0,
+      last_curation_summary: r.data.last_curation_summary ?? {},
+    })).catch(() => setTaskMeta(null));
     sourceApi.list(id).then((r) => setSources(r.data)).catch(() => {});
     analysisApi.get(id).then((r) => setAnalysis(r.data)).catch(() => setAnalysis(null));
   }, [id]);
@@ -68,8 +126,11 @@ export default function ReportView() {
   };
 
   const sourceMap = new Map(sources.map((s) => [s.id, s]));
-
-  const sourceIndexMap = new Map(sources.map((s, i) => [s.id, i + 1]));
+  const hasSourceCuration = sources.some(hasCurationMetadata);
+  const includedSources = hasSourceCuration ? sources.filter((source) => source.included_in_analysis) : sources;
+  const excludedSources = hasSourceCuration ? sources.filter((source) => !source.included_in_analysis) : [];
+  const citationSources = hasSourceCuration && includedSources.length > 0 ? includedSources : sources;
+  const sourceIndexMap = new Map(citationSources.map((s, i) => [s.id, i + 1]));
 
   const handleCiteClick = (sourceId: string) => {
     const src = sourceMap.get(sourceId);
@@ -89,6 +150,8 @@ export default function ReportView() {
   if (!report) return <div className="p-8 text-gray-500">Loading...</div>;
 
   const content = report.content;
+  const curationSummary = taskMeta?.last_curation_summary ?? {};
+  const removedReasons = Object.entries(curationSummary.removed_reasons ?? {}).sort((a, b) => b[1] - a[1]);
 
   // Collect all claims for reverse index in trace panel
   const allClaims: Claim[] = [];
@@ -118,6 +181,25 @@ export default function ReportView() {
           </span>
           <span>{new Date(report.created_at).toLocaleString()}</span>
         </div>
+        {taskMeta && (taskMeta.focus_areas.length > 0 || taskMeta.manual_correction_count > 0 || hasCurationSummary(taskMeta.last_curation_summary)) && (
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            {taskMeta.focus_areas.map((area) => (
+              <span key={area} className="rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
+                {area}
+              </span>
+            ))}
+            {taskMeta.manual_correction_count > 0 && (
+              <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700">
+                人工修正 {taskMeta.manual_correction_count} 次
+              </span>
+            )}
+            {hasCurationSummary(taskMeta.last_curation_summary) && (
+              <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">
+                证据筛选 {taskMeta.last_curation_summary.kept_count ?? 0}/{taskMeta.last_curation_summary.input_count ?? 0}
+              </span>
+            )}
+          </div>
+        )}
         <div className="flex gap-2 mt-3">
           <button
             onClick={() => handleExport("markdown")}
@@ -142,13 +224,41 @@ export default function ReportView() {
         </section>
       )}
 
+      {hasCurationSummary(curationSummary) && (
+        <section className="rounded-2xl border border-gray-200 bg-white p-5">
+          <h2 className="text-lg font-semibold text-gray-900">本次证据筛选说明</h2>
+          <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+            <SummaryTile label="候选来源" value={String(curationSummary.input_count ?? 0)} />
+            <SummaryTile label="纳入分析" value={String(curationSummary.kept_count ?? 0)} />
+            <SummaryTile label="已筛除" value={String(curationSummary.removed_count ?? 0)} />
+            <SummaryTile label="一手证据" value={String(curationSummary.first_party_count ?? 0)} />
+            <SummaryTile label="平均可信度" value={formatReliability(curationSummary.avg_reliability)} />
+          </div>
+          {removedReasons.length > 0 ? (
+            <div className="mt-4 flex flex-wrap gap-2">
+              {removedReasons.map(([reason, count]) => (
+                <span key={reason} className="rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700">
+                  {getCurationReasonLabel(reason)} {count} 条
+                </span>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-4 text-sm text-gray-500">
+              本次没有记录明显的筛除原因，说明大多数候选来源都直接进入了分析链路。
+            </p>
+          )}
+        </section>
+      )}
+
       {/* Comparison Matrix + SWOT (structured analysis) */}
       {analysis && (
-        <ComparisonMatrix
-          analysis={analysis}
-          onCiteClick={handleCiteClick}
-          sourceIndexMap={sourceIndexMap}
-        />
+        <Suspense fallback={<SectionLoading label="正在加载结构化分析视图..." />}>
+          <LazyComparisonMatrix
+            analysis={analysis}
+            onCiteClick={handleCiteClick}
+            sourceIndexMap={sourceIndexMap}
+          />
+        </Suspense>
       )}
 
       {/* Sections */}
@@ -167,30 +277,56 @@ export default function ReportView() {
       ))}
 
       {/* Sources reference list */}
-      {sources.length > 0 && (
+      {citationSources.length > 0 && (
         <section className="border-t border-gray-200 pt-6">
-          <h2 className="text-lg font-semibold text-gray-800 mb-3">Sources</h2>
+          <h2 className="text-lg font-semibold text-gray-800 mb-3">
+            {hasSourceCuration ? "已纳入分析的来源" : "Sources"}
+          </h2>
+          {hasSourceCuration && (
+            <p className="mb-3 text-sm text-gray-500">
+              报告中的引用编号只对应最终进入分析链路的来源。
+            </p>
+          )}
           <ol className="list-decimal list-inside space-y-2">
-            {sources.map((s, idx) => (
+            {citationSources.map((s, idx) => (
               <li
                 key={s.id}
                 id={`source-${s.id}`}
-                className={`text-sm flex items-center gap-2 p-2 rounded-lg transition-colors ${highlightedSourceId === s.id ? "bg-blue-50 border border-blue-200" : ""}`}
+                className={`rounded-lg border p-3 text-sm transition-colors ${highlightedSourceId === s.id ? "border-blue-200 bg-blue-50" : "border-transparent bg-white"}`}
               >
-                <span className="text-xs font-mono text-gray-400 mr-1">[{idx + 1}]</span>
-                <button
-                  onClick={() => handleCiteClick(s.id)}
-                  className="text-blue-600 hover:underline text-left"
-                >
-                  {s.title || s.url || s.id}
-                </button>
-                <span className="text-gray-400 text-xs">[{s.type}]</span>
-                {s.reliability_score !== undefined && (
-                  <ReliabilityBadge score={s.reliability_score} />
-                )}
+                <SourceListItem
+                  source={s}
+                  index={idx + 1}
+                  onSelect={handleCiteClick}
+                  showIncludedBadge={false}
+                />
               </li>
             ))}
           </ol>
+        </section>
+      )}
+
+      {excludedSources.length > 0 && (
+        <section className="rounded-2xl border border-gray-200 bg-gray-50 p-5">
+          <h2 className="text-lg font-semibold text-gray-800 mb-3">已筛除 / 未纳入分析的候选来源</h2>
+          <p className="text-sm text-gray-500">
+            这些来源被系统保留下来用于审计和追溯，但没有进入最终分析与引用链路。
+          </p>
+          <div className="mt-4 space-y-3">
+            {excludedSources.map((source) => (
+              <div
+                key={source.id}
+                id={`source-${source.id}`}
+                className={`rounded-xl border p-3 text-sm ${highlightedSourceId === source.id ? "border-blue-200 bg-blue-50" : "border-gray-200 bg-white"}`}
+              >
+                <SourceListItem
+                  source={source}
+                  onSelect={handleCiteClick}
+                  showIncludedBadge
+                />
+              </div>
+            ))}
+          </div>
         </section>
       )}
 
@@ -246,6 +382,15 @@ export default function ReportView() {
           }}
         />
       )}
+    </div>
+  );
+}
+
+function SummaryTile({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl bg-gray-50 p-4">
+      <div className="text-xs text-gray-500">{label}</div>
+      <div className="mt-1 text-2xl font-semibold text-gray-900">{value}</div>
     </div>
   );
 }
@@ -337,7 +482,65 @@ function ClaimBlock({
   );
 }
 
+function SourceListItem({
+  source,
+  index,
+  onSelect,
+  showIncludedBadge,
+}: {
+  source: Source;
+  index?: number;
+  onSelect: (sourceId: string) => void;
+  showIncludedBadge: boolean;
+}) {
+  const excerpt = getSourceExcerpt(source);
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        {index ? <span className="text-xs font-mono text-gray-400">[{index}]</span> : null}
+        <button
+          onClick={() => onSelect(source.id)}
+          className="text-left text-blue-600 hover:underline"
+        >
+          {source.title || source.url || source.id}
+        </button>
+        <span className="text-xs text-gray-400">[{source.type}]</span>
+        {source.reliability_score !== undefined ? (
+          <ReliabilityBadge score={source.reliability_score} />
+        ) : null}
+        {showIncludedBadge ? (
+          <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+            source.included_in_analysis ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"
+          }`}>
+            {source.included_in_analysis ? "已纳入分析" : "未纳入分析"}
+          </span>
+        ) : null}
+      </div>
+      <div className="flex flex-wrap gap-2 text-xs">
+        {source.curation_reason ? (
+          <span className="rounded-full bg-gray-100 px-2 py-0.5 text-gray-700">
+            {getCurationReasonLabel(source.curation_reason)}
+          </span>
+        ) : null}
+        {source.curation_tags?.slice(0, 4).map((tag) => (
+          <span key={tag} className="rounded-full bg-blue-50 px-2 py-0.5 text-blue-700">
+            {tag}
+          </span>
+        ))}
+      </div>
+      {excerpt && (
+        <p className="text-sm leading-6 text-gray-600">
+          {excerpt}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function SourceModal({ source, onClose }: { source: Source; onClose: () => void }) {
+  const excerpt = getSourceExcerpt(source);
+
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={onClose}>
       <div
@@ -355,6 +558,20 @@ function SourceModal({ source, onClose }: { source: Source; onClose: () => void 
               <span className="font-medium text-gray-600">Type:</span>{" "}
               <span className="px-2 py-0.5 bg-gray-100 rounded text-xs">{source.type}</span>
             </div>
+            <div>
+              <span className="font-medium text-gray-600">Status:</span>{" "}
+              <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                source.included_in_analysis ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"
+              }`}>
+                {source.included_in_analysis ? "已纳入分析" : "未纳入分析"}
+              </span>
+            </div>
+            {source.curation_reason && (
+              <div>
+                <span className="font-medium text-gray-600">Curation:</span>{" "}
+                {getCurationReasonLabel(source.curation_reason)}
+              </div>
+            )}
             {source.url && (
               <div>
                 <span className="font-medium text-gray-600">URL:</span>{" "}
@@ -376,9 +593,19 @@ function SourceModal({ source, onClose }: { source: Source; onClose: () => void 
             </div>
           </div>
 
-          {source.content_snippet && (
+          {source.curation_tags?.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {source.curation_tags.map((tag) => (
+                <span key={tag} className="rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
+                  {tag}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {excerpt && (
             <div className="bg-gray-50 rounded-lg p-4 text-sm text-gray-700 whitespace-pre-wrap">
-              {source.content_snippet}
+              {excerpt}
             </div>
           )}
 

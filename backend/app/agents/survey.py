@@ -22,11 +22,13 @@ class SurveyAgent(BaseAgent):
             - competitors: list[str]
             - industry: str (optional)
             - focus_areas: list[str] (optional)
+            - our_product_notes: str (optional)
         """
         target_product = input_data.get("target_product", "")
         competitors = input_data.get("competitors", [])
         industry = input_data.get("industry", "")
         focus_areas = input_data.get("focus_areas")
+        our_product_notes = input_data.get("our_product_notes", "")
 
         # Normalize competitor names
         competitor_names = [
@@ -39,6 +41,7 @@ class SurveyAgent(BaseAgent):
             competitors=competitor_names,
             industry=industry,
             focus_areas=focus_areas,
+            our_product_notes=our_product_notes,
         )
 
         validated, llm_resp, traces = await self.call_and_validate(

@@ -136,6 +136,7 @@ class CollectorAgent(BaseAgent):
             - our_product_notes: str (optional)
         """
         target_product = input_data["target_product"]
+        target_website = input_data.get("target_website", "").strip()
         raw_competitors = input_data.get("competitors", [])
         industry = input_data.get("industry", "")
         focus_areas = input_data.get("focus_areas")
@@ -151,6 +152,8 @@ class CollectorAgent(BaseAgent):
 
         competitor_names = [c.get("name", str(c)) for c in competitors]
         competitor_websites = [c.get("website") for c in competitors if c.get("website")]
+        website_candidates = [url for url in [target_website, *competitor_websites] if url]
+        website_candidates = list(dict.fromkeys(website_candidates))
 
         # Attempt real web search
         search_results = await self._search_products(
@@ -158,8 +161,8 @@ class CollectorAgent(BaseAgent):
         )
 
         # Deep-fetch competitor websites for richer content
-        if competitor_websites:
-            website_results = await self._fetch_competitor_websites(competitor_websites)
+        if website_candidates:
+            website_results = await self._fetch_competitor_websites(website_candidates)
             search_results = website_results + search_results
 
         # Deep-fetch top search result URLs for richer content (beyond snippets)
@@ -180,6 +183,7 @@ class CollectorAgent(BaseAgent):
         if search_results:
             user_prompt = build_collector_prompt(
                 target_product=target_product,
+                target_website=target_website,
                 competitors=competitors,
                 industry=industry,
                 focus_areas=focus_areas,
@@ -189,6 +193,7 @@ class CollectorAgent(BaseAgent):
         else:
             user_prompt = build_collector_prompt(
                 target_product=target_product,
+                target_website=target_website,
                 competitors=competitors,
                 industry=industry,
                 focus_areas=focus_areas,
@@ -276,7 +281,7 @@ class CollectorAgent(BaseAgent):
     async def _fetch_competitor_websites(
         websites: list[str],
     ) -> list[SearchResult]:
-        """Deep-fetch competitor websites directly for content."""
+        """Deep-fetch official product websites directly for content."""
         try:
             fetched = await fetch_webpages(websites, max_chars=8000)
         except Exception:

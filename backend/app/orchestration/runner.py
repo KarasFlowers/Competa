@@ -15,6 +15,7 @@ from app.models.database import (
     InterviewModel,
     MetricsModel,
     ReportModel,
+    RunHistoryModel,
     SourceModel,
     SurveyModel,
     TaskModel,
@@ -23,9 +24,19 @@ from app.models.database import (
 from app.orchestration.graph import pipeline_graph
 from app.orchestration.state import PipelineState
 from app.schemas.trace import EventType, TraceEvent
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 logger = logging.getLogger(__name__)
+
+
+async def _next_run_index(session, task_id: str) -> int:
+    result = await session.execute(
+        select(RunHistoryModel.run_index)
+        .where(RunHistoryModel.task_id == task_id)
+        .order_by(RunHistoryModel.run_index.desc())
+    )
+    latest = result.scalars().first()
+    return (latest or 0) + 1
 
 
 def _merge_state_update(final_state: PipelineState, chunk: dict) -> None:
@@ -82,10 +93,14 @@ async def run_pipeline(task_id: str) -> None:
             existing_sources = [
                 {"id": s.id, "type": s.type, "url": s.url, "title": s.title,
                  "content_snippet": s.content_snippet, "reliability_score": s.reliability_score,
+                 "included_in_analysis": s.included_in_analysis,
+                 "curation_reason": s.curation_reason,
+                 "curation_tags": s.curation_tags or [],
+                 "curated_excerpt": s.curated_excerpt or "",
                  "fetched_at": str(s.fetched_at)}
                 for s in existing_src_rows
             ]
-            existing_src_ids = {s.id for s in existing_src_rows}
+            existing_src_by_id = {s.id: s for s in existing_src_rows}
             existing_cons = await session.execute(
                 select(ConstraintModel).where(ConstraintModel.task_id == task_id)
             )
@@ -98,11 +113,15 @@ async def run_pipeline(task_id: str) -> None:
                 "task_id": task_id,
                 "task": {
                     "target_product": task.target_product,
+                    "target_website": task.target_website or "",
                     "competitors": task.competitors or [],
                     "industry": task.industry or "",
+                    "focus_areas": task.focus_areas or [],
                     "our_product_notes": task.our_product_notes or "",
                 },
                 "sources": existing_sources,
+                "curated_sources": [],
+                "curation_summary": {},
                 "survey": {},
                 "interview": {},
                 "analysis": {},
@@ -131,22 +150,27 @@ async def run_pipeline(task_id: str) -> None:
             # Persist sources (preserve Pydantic ID so evidence_ids in claims resolve)
             # Skip sources that already exist in DB (rerun scenario)
             for src_data in final_state.get("sources", []):
-                if src_data.get("id") in existing_src_ids:
-                    continue
-                source = SourceModel(
-                    id=src_data.get("id"),  # preserve original ID for citation linking
-                    task_id=task_id,
-                    type=src_data.get("type", "url"),
-                    url=src_data.get("url"),
-                    title=src_data.get("title", ""),
-                    content_snippet=src_data.get("content_snippet", ""),
-                    reliability_score=src_data.get("reliability_score", 0.5),
-                )
-                session.add(source)
+                source = existing_src_by_id.get(src_data.get("id"))
+                if source is None:
+                    source = SourceModel(
+                        id=src_data.get("id"),  # preserve original ID for citation linking
+                        task_id=task_id,
+                    )
+                    session.add(source)
+                source.type = src_data.get("type", "url")
+                source.url = src_data.get("url")
+                source.title = src_data.get("title", "")
+                source.content_snippet = src_data.get("content_snippet", "")
+                source.reliability_score = src_data.get("reliability_score", 0.5)
+                source.included_in_analysis = bool(src_data.get("included_in_analysis", False))
+                source.curation_reason = src_data.get("curation_reason", "")
+                source.curation_tags = src_data.get("curation_tags", []) or []
+                source.curated_excerpt = src_data.get("curated_excerpt", "")
 
             # Persist survey
             survey_data = final_state.get("survey", {})
             if survey_data:
+                await session.execute(delete(SurveyModel).where(SurveyModel.task_id == task_id))
                 survey = SurveyModel(
                     task_id=task_id,
                     content=survey_data,
@@ -156,6 +180,7 @@ async def run_pipeline(task_id: str) -> None:
             # Persist interview
             interview_data = final_state.get("interview", {})
             if interview_data:
+                await session.execute(delete(InterviewModel).where(InterviewModel.task_id == task_id))
                 interview = InterviewModel(
                     task_id=task_id,
                     content=interview_data,
@@ -165,6 +190,7 @@ async def run_pipeline(task_id: str) -> None:
             # Persist structured analysis (feature trees / pricing / personas / SWOT)
             analysis_data = final_state.get("analysis", {})
             if analysis_data:
+                await session.execute(delete(AnalysisModel).where(AnalysisModel.task_id == task_id))
                 analysis = AnalysisModel(
                     task_id=task_id,
                     content=analysis_data,
@@ -174,6 +200,7 @@ async def run_pipeline(task_id: str) -> None:
             # Persist report
             report_data = final_state.get("report", {})
             if report_data:
+                await session.execute(delete(ReportModel).where(ReportModel.task_id == task_id))
                 report = ReportModel(
                     task_id=task_id,
                     title=report_data.get("title", "Competitive Analysis Report"),
@@ -203,12 +230,13 @@ async def run_pipeline(task_id: str) -> None:
             # Persist metrics
             metrics_data = final_state.get("metrics", {})
             if metrics_data:
+                await session.execute(delete(MetricsModel).where(MetricsModel.task_id == task_id))
                 metrics = MetricsModel(
                     task_id=task_id,
                     source_count=metrics_data.get("source_count", 0),
                     claim_count=metrics_data.get("claim_count", 0),
                     evidence_coverage_rate=metrics_data.get("evidence_coverage_rate", 0.0),
-                    manual_correction_count=0,
+                    manual_correction_count=task.manual_correction_count or 0,
                 )
                 session.add(metrics)
 
@@ -225,8 +253,30 @@ async def run_pipeline(task_id: str) -> None:
                 )
                 session.add(constraint)
 
+            run_history = RunHistoryModel(
+                task_id=task_id,
+                run_index=await _next_run_index(session, task_id),
+                status=final_state.get("status", "completed"),
+                retry_count=final_state.get("retry_count", 0),
+                source_count=metrics_data.get("source_count", len(final_state.get("curated_sources") or final_state.get("sources", []))) if metrics_data else len(final_state.get("curated_sources") or final_state.get("sources", [])),
+                claim_count=metrics_data.get("claim_count", 0) if metrics_data else 0,
+                evidence_coverage_rate=metrics_data.get("evidence_coverage_rate", 0.0) if metrics_data else 0.0,
+                manual_correction_count=task.manual_correction_count or 0,
+                qa_feedback=final_state.get("qa_feedback", {}) or {},
+                handoff=final_state.get("handoff", {}) or {},
+                curation_summary=final_state.get("curation_summary", {}) or {},
+                constraints=[str(value) for value in final_state.get("constraints", [])],
+                analysis=analysis_data or {},
+                report=report_data or {},
+                trace_events=trace_events or [],
+            )
+            session.add(run_history)
+
             # Update task status
             task.status = final_state.get("status", "completed")
+            task.last_qa_feedback = final_state.get("qa_feedback", {}) or {}
+            task.last_handoff = final_state.get("handoff", {}) or {}
+            task.last_curation_summary = final_state.get("curation_summary", {}) or {}
             await session.commit()
 
             logger.info(

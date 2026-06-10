@@ -322,3 +322,88 @@ class TestRobotsCompliance:
         monkeypatch.setattr(search.settings, "RESPECT_ROBOTS_TXT", False)
         # Should return True without any network call
         assert await search._is_fetch_allowed("https://example.com/private/x") is True
+
+
+class TestSourceCuration:
+    def test_curate_sources_deduplicates_and_caps_domains(self):
+        from app.services.curation import curate_sources
+
+        raw_sources = [
+            {
+                "id": "s1",
+                "type": "url",
+                "url": "https://example.com/pricing",
+                "title": "Pricing",
+                "content_snippet": "Official pricing page",
+                "reliability_score": 0.9,
+            },
+            {
+                "id": "s2",
+                "type": "url",
+                "url": "https://example.com/pricing?ref=ad",
+                "title": "Pricing Duplicate",
+                "content_snippet": "Official pricing page",
+                "reliability_score": 0.91,
+            },
+            {
+                "id": "s3",
+                "type": "url",
+                "url": "https://example.com/features",
+                "title": "Features",
+                "content_snippet": "Feature summary",
+                "reliability_score": 0.88,
+            },
+            {
+                "id": "s4",
+                "type": "url",
+                "url": "https://example.com/blog",
+                "title": "Overflow Domain",
+                "content_snippet": "extra",
+                "reliability_score": 0.87,
+            },
+            {
+                "id": "s5",
+                "type": "url",
+                "url": "https://unknown-blog.net/post",
+                "title": "Low reliability",
+                "content_snippet": "weak source",
+                "reliability_score": 0.42,
+            },
+            {
+                "id": "s6",
+                "type": "survey",
+                "title": "[模拟] Survey",
+                "content_snippet": "Primary research insight",
+                "reliability_score": 0.55,
+            },
+        ]
+
+        result = curate_sources(raw_sources, max_sources=10, max_sources_per_domain=2)
+        kept_ids = [item["id"] for item in result.sources]
+
+        assert "s6" in kept_ids  # first-party evidence preserved
+        assert "s5" not in kept_ids  # low reliability url removed
+        assert "s2" not in kept_ids  # normalized duplicate removed
+        assert "s4" not in kept_ids  # domain cap applied
+        assert result.summary["removed_count"] == 3
+        assert result.summary["removed_reasons"]["duplicate_url"] == 1
+        assert result.summary["removed_reasons"]["low_reliability"] == 1
+        assert result.summary["removed_reasons"]["domain_cap"] == 1
+
+    def test_curated_sources_include_excerpt_and_tags(self):
+        from app.services.curation import curate_sources
+
+        result = curate_sources([
+            {
+                "id": "s1",
+                "type": "url",
+                "url": "https://official-site.com/product",
+                "title": "Official Product Page",
+                "content_snippet": "The platform offers automation, analytics, and collaboration features for enterprise teams.",
+                "reliability_score": 0.9,
+            },
+        ])
+
+        curated = result.sources[0]
+        assert curated["curated_excerpt"].startswith("Official Product Page:")
+        assert "high_confidence" in curated["curation_tags"]

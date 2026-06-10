@@ -1,6 +1,7 @@
 # 本地参考子项目（不纳入版本控制）
 competitive-analysis-agent/
 competitorsmart/
+reference/external/
 
 # 开发环境 / 操作系统
 .env

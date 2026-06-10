@@ -10,6 +10,7 @@ from app.models.database import (
     InterviewModel,
     MetricsModel,
     ReportModel,
+    RunHistoryModel,
     SourceModel,
     SurveyModel,
     TaskModel,
@@ -36,29 +37,58 @@ class TestTasks:
             json={
                 "industry": "SaaS",
                 "target_product": "ProductA",
+                "target_website": "https://producta.example.com",
                 "competitors": ["ProductB", "ProductC"],
+                "focus_areas": ["pricing", "persona", "pricing"],
             },
         )
         assert resp.status_code == 201
         data = resp.json()
         assert data["target_product"] == "ProductA"
+        assert data["target_website"] == "https://producta.example.com"
+        assert data["focus_areas"] == ["pricing", "persona"]
         task_id = data["id"]
 
         resp = await client.get("/api/tasks")
         assert resp.status_code == 200
+        created_task = next((task for task in resp.json() if task["id"] == task_id), None)
         ids = [t["id"] for t in resp.json()]
         assert task_id in ids
+        assert created_task is not None
+        assert created_task["target_website"] == "https://producta.example.com"
 
     async def test_get_task(self, client: AsyncClient):
         resp = await client.post(
             "/api/tasks",
-            json={"target_product": "X"},
+            json={"target_product": "X", "target_website": "https://x.example.com"},
         )
         task_id = resp.json()["id"]
 
         resp = await client.get(f"/api/tasks/{task_id}")
         assert resp.status_code == 200
         assert resp.json()["id"] == task_id
+        assert resp.json()["target_website"] == "https://x.example.com"
+
+    async def test_get_task_includes_last_curation_summary(self, client: AsyncClient):
+        resp = await client.post(
+            "/api/tasks",
+            json={"target_product": "TaskWithCuration"},
+        )
+        task_id = resp.json()["id"]
+
+        async with TestSession() as session:
+            task = await session.get(TaskModel, task_id)
+            task.last_curation_summary = {
+                "input_count": 6,
+                "kept_count": 4,
+                "removed_count": 2,
+                "removed_reasons": {"low_reliability": 2},
+            }
+            await session.commit()
+
+        detail = await client.get(f"/api/tasks/{task_id}")
+        assert detail.status_code == 200
+        assert detail.json()["last_curation_summary"]["kept_count"] == 4
 
     async def test_get_nonexistent_task(self, client: AsyncClient):
         resp = await client.get("/api/tasks/nonexistent")
@@ -70,7 +100,9 @@ class TestTasks:
             json={
                 "industry": "AI",
                 "target_product": "WorkspaceA",
+                "target_website": "https://workspacea.example.com",
                 "competitors": ["Alpha", "Beta"],
+                "focus_areas": ["pricing", "swot"],
                 "our_product_notes": "Internal differentiation notes",
             },
         )
@@ -85,6 +117,13 @@ class TestTasks:
         async with TestSession() as session:
             failed_task = await session.get(TaskModel, failed_task_id)
             failed_task.status = "failed"
+            focus_task = await session.get(TaskModel, task_id)
+            focus_task.last_curation_summary = {
+                "input_count": 9,
+                "kept_count": 6,
+                "removed_count": 3,
+                "removed_reasons": {"domain_cap": 1, "low_reliability": 2},
+            }
             session.add_all([
                 MetricsModel(
                     task_id=task_id,
@@ -111,7 +150,10 @@ class TestTasks:
         assert data["stats"]["avg_evidence_coverage"] == 0.88
 
         item = next(t for t in data["items"] if t["id"] == task_id)
+        assert item["target_website"] == "https://workspacea.example.com"
         assert item["our_product_notes"] == "Internal differentiation notes"
+        assert item["focus_areas"] == ["pricing", "swot"]
+        assert item["last_curation_summary"]["kept_count"] == 6
         assert item["metrics"]["source_count"] == 6
         assert item["artifacts"] == {
             "report": True,
@@ -161,6 +203,151 @@ class TestReportsAndSources:
         resp = await client.get(f"/api/tasks/{task_id}/sources")
         assert resp.status_code == 200
         assert resp.json() == []
+
+    async def test_sources_return_curation_fields_and_sort_included_first(self, client: AsyncClient):
+        resp = await client.post("/api/tasks", json={"target_product": "CuratedSources"})
+        task_id = resp.json()["id"]
+        now = datetime.utcnow()
+
+        async with TestSession() as session:
+            session.add_all([
+                SourceModel(
+                    task_id=task_id,
+                    id="src-excluded",
+                    title="Excluded",
+                    content_snippet="excluded snippet",
+                    reliability_score=0.99,
+                    included_in_analysis=False,
+                    curation_reason="domain_cap",
+                    curation_tags=["high_confidence"],
+                    curated_excerpt="Excluded excerpt",
+                    fetched_at=now - timedelta(minutes=3),
+                ),
+                SourceModel(
+                    task_id=task_id,
+                    id="src-included-high",
+                    title="Included High",
+                    content_snippet="included high snippet",
+                    reliability_score=0.91,
+                    included_in_analysis=True,
+                    curation_reason="selected",
+                    curation_tags=["high_confidence"],
+                    curated_excerpt="Included high excerpt",
+                    fetched_at=now - timedelta(minutes=2),
+                ),
+                SourceModel(
+                    task_id=task_id,
+                    id="src-included-mid",
+                    title="Included Mid",
+                    content_snippet="included mid snippet",
+                    reliability_score=0.72,
+                    included_in_analysis=True,
+                    curation_reason="selected",
+                    curation_tags=["medium_confidence"],
+                    curated_excerpt="Included mid excerpt",
+                    fetched_at=now - timedelta(minutes=1),
+                ),
+            ])
+            await session.commit()
+
+        result = await client.get(f"/api/tasks/{task_id}/sources")
+        assert result.status_code == 200
+        payload = result.json()
+        assert [item["id"] for item in payload] == [
+            "src-included-high",
+            "src-included-mid",
+            "src-excluded",
+        ]
+        assert payload[0]["included_in_analysis"] is True
+        assert payload[0]["curation_reason"] == "selected"
+        assert payload[0]["curated_excerpt"] == "Included high excerpt"
+        assert payload[2]["included_in_analysis"] is False
+        assert payload[2]["curation_reason"] == "domain_cap"
+
+    async def test_markdown_export_includes_curation_sections(self, client: AsyncClient):
+        resp = await client.post("/api/tasks", json={"target_product": "ExportMarkdown"})
+        task_id = resp.json()["id"]
+
+        async with TestSession() as session:
+            session.add(ReportModel(
+                task_id=task_id,
+                title="Export Report",
+                content={
+                    "title": "Export Report",
+                    "executive_summary": "Summary text",
+                    "sections": [
+                        {
+                            "title": "Overview",
+                            "content": "Overview content",
+                            "claims": [
+                                {"content": "Claim 1", "evidence_ids": ["src-included"]},
+                            ],
+                        },
+                    ],
+                },
+                status="final",
+            ))
+            session.add_all([
+                SourceModel(
+                    task_id=task_id,
+                    id="src-included",
+                    title="Included source",
+                    type="web",
+                    url="https://example.com/included",
+                    content_snippet="Included snippet",
+                    reliability_score=0.86,
+                    included_in_analysis=True,
+                    curation_reason="selected",
+                    curation_tags=["pricing", "first_party"],
+                    curated_excerpt="Included excerpt",
+                ),
+                SourceModel(
+                    task_id=task_id,
+                    id="src-excluded",
+                    title="Excluded source",
+                    type="web",
+                    url="https://example.com/excluded",
+                    content_snippet="Excluded snippet",
+                    reliability_score=0.42,
+                    included_in_analysis=False,
+                    curation_reason="domain_cap",
+                    curation_tags=["redundant"],
+                    curated_excerpt="Excluded excerpt",
+                ),
+            ])
+            await session.commit()
+
+        export_resp = await client.get(f"/api/tasks/{task_id}/export?format=markdown")
+        assert export_resp.status_code == 200
+        assert export_resp.headers["content-type"].startswith("text/markdown")
+        assert export_resp.headers["content-disposition"] == f'attachment; filename="report_{task_id}.md"'
+        assert "## Sources Used in Analysis" in export_resp.text
+        assert "## Excluded or Deprioritized Sources" in export_resp.text
+        assert "Curation: Included in analysis" in export_resp.text
+        assert "Curation: Removed due to domain diversity cap" in export_resp.text
+        assert "Excerpt: Included excerpt" in export_resp.text
+        assert "Excerpt: Excluded excerpt" in export_resp.text
+
+    async def test_docx_export_returns_downloadable_file(self, client: AsyncClient):
+        resp = await client.post("/api/tasks", json={"target_product": "ExportDocx"})
+        task_id = resp.json()["id"]
+
+        async with TestSession() as session:
+            session.add(ReportModel(
+                task_id=task_id,
+                title="Docx Report",
+                content={"title": "Docx Report", "sections": [{"title": "Overview", "content": "Body"}]},
+                status="final",
+            ))
+            await session.commit()
+
+        export_resp = await client.get(f"/api/tasks/{task_id}/export?format=docx")
+        assert export_resp.status_code == 200
+        assert export_resp.headers["content-type"] == (
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
+        assert export_resp.headers["content-disposition"] == f'attachment; filename="report_{task_id}.docx"'
+        assert export_resp.content.startswith(b"PK")
 
     async def test_metrics_returns_latest(self, client: AsyncClient):
         resp = await client.post("/api/tasks", json={"target_product": "LatestMetrics"})
@@ -241,7 +428,7 @@ class TestRunAndStatus:
         resp = await client.post(f"/api/tasks/{task_id}/run")
         assert resp.status_code == 409
 
-    async def test_completed_task_can_rerun_and_purges_old_artifacts(self, client: AsyncClient, monkeypatch):
+    async def test_completed_task_can_run_again_and_purges_old_artifacts(self, client: AsyncClient, monkeypatch):
         monkeypatch.setattr("app.api.tasks.run_pipeline", _noop_run_pipeline)
         resp = await client.post("/api/tasks", json={"target_product": "RerunTarget"})
         task_id = resp.json()["id"]
@@ -249,12 +436,18 @@ class TestRunAndStatus:
         async with TestSession() as session:
             task = await session.get(TaskModel, task_id)
             task.status = "completed"
+            task.last_qa_feedback = {"passed": True}
+            task.last_handoff = {"target_agent": "writer"}
+            task.last_curation_summary = {"kept_count": 3}
             session.add_all([
                 SourceModel(task_id=task_id, title="Old Source", content_snippet="old"),
                 ReportModel(task_id=task_id, title="Old Report", content={"title": "old"}),
                 TraceModel(task_id=task_id, agent_name="pipeline", events=[{"event": "old"}]),
                 MetricsModel(task_id=task_id, source_count=1, claim_count=1, evidence_coverage_rate=1.0),
                 ConstraintModel(task_id=task_id, constraint_value="old"),
+                AnalysisModel(task_id=task_id, content={"feature_trees": []}),
+                SurveyModel(task_id=task_id, content={"title": "Survey"}),
+                InterviewModel(task_id=task_id, content={"title": "Interview"}),
             ])
             await session.commit()
 
@@ -264,8 +457,62 @@ class TestRunAndStatus:
         async with TestSession() as session:
             task = await session.get(TaskModel, task_id)
             assert task.status == "collecting"
+            assert task.last_qa_feedback == {}
+            assert task.last_handoff == {}
+            assert task.last_curation_summary == {}
 
-            for model in (SourceModel, ReportModel, TraceModel, MetricsModel, ConstraintModel):
+            for model in (
+                SourceModel,
+                ReportModel,
+                TraceModel,
+                MetricsModel,
+                ConstraintModel,
+                AnalysisModel,
+                SurveyModel,
+                InterviewModel,
+            ):
+                result = await session.execute(model.__table__.select().where(model.task_id == task_id))
+                assert result.first() is None
+
+    async def test_rerun_preserves_sources_and_constraints_but_clears_artifacts(self, client: AsyncClient, monkeypatch):
+        monkeypatch.setattr("app.api.tasks.run_pipeline", _noop_run_pipeline)
+        resp = await client.post("/api/tasks", json={"target_product": "PreserveSources"})
+        task_id = resp.json()["id"]
+
+        async with TestSession() as session:
+            task = await session.get(TaskModel, task_id)
+            task.status = "completed"
+            task.last_qa_feedback = {"passed": False}
+            task.last_handoff = {"target_agent": "analyst"}
+            task.last_curation_summary = {"kept_count": 2}
+            session.add_all([
+                SourceModel(task_id=task_id, title="Keep Source", content_snippet="keep"),
+                ConstraintModel(task_id=task_id, constraint_type="human", constraint_value="keep-constraint"),
+                ReportModel(task_id=task_id, title="Old Report", content={"title": "old"}),
+                TraceModel(task_id=task_id, agent_name="pipeline", events=[{"event": "old"}]),
+                MetricsModel(task_id=task_id, source_count=1, claim_count=1, evidence_coverage_rate=1.0),
+                AnalysisModel(task_id=task_id, content={"feature_trees": []}),
+                SurveyModel(task_id=task_id, content={"title": "Survey"}),
+                InterviewModel(task_id=task_id, content={"title": "Interview"}),
+            ])
+            await session.commit()
+
+        rerun = await client.post(f"/api/tasks/{task_id}/rerun")
+        assert rerun.status_code == 202
+
+        async with TestSession() as session:
+            task = await session.get(TaskModel, task_id)
+            assert task.status == "collecting"
+            assert task.last_qa_feedback == {}
+            assert task.last_handoff == {}
+            assert task.last_curation_summary == {}
+
+            sources = await session.execute(SourceModel.__table__.select().where(SourceModel.task_id == task_id))
+            constraints = await session.execute(ConstraintModel.__table__.select().where(ConstraintModel.task_id == task_id))
+            assert sources.first() is not None
+            assert constraints.first() is not None
+
+            for model in (ReportModel, TraceModel, MetricsModel, AnalysisModel, SurveyModel, InterviewModel):
                 result = await session.execute(model.__table__.select().where(model.task_id == task_id))
                 assert result.first() is None
 
@@ -380,6 +627,120 @@ class TestCorrections:
         )
         assert resp.status_code == 200
 
+    async def test_human_corrections_increment_task_counter(self, client: AsyncClient):
+        resp = await client.post("/api/tasks", json={"target_product": "CorrectionsCounter"})
+        task_id = resp.json()["id"]
+
+        async with TestSession() as session:
+            session.add(ReportModel(
+                task_id=task_id,
+                title="Test Report",
+                content={"sections": [{"title": "Overview", "claims": [{"id": "c1", "content": "original"}]}]},
+                status="final",
+            ))
+            await session.commit()
+
+        add_source = await client.post(
+            f"/api/tasks/{task_id}/corrections",
+            json={
+                "correction_type": "add_source",
+                "data": {"title": "Extra Source", "content_snippet": "details"},
+            },
+        )
+        assert add_source.status_code == 200
+
+        edit_claim = await client.post(
+            f"/api/tasks/{task_id}/corrections",
+            json={
+                "correction_type": "edit_claim",
+                "data": {"claim_id": "c1", "content": "updated"},
+            },
+        )
+        assert edit_claim.status_code == 200
+
+        task_resp = await client.get(f"/api/tasks/{task_id}")
+        assert task_resp.status_code == 200
+        assert task_resp.json()["manual_correction_count"] == 2
+
+    async def test_constraints_endpoint_returns_latest_constraints(self, client: AsyncClient):
+        resp = await client.post("/api/tasks", json={"target_product": "ConstraintQuery"})
+        task_id = resp.json()["id"]
+
+        async with TestSession() as session:
+            session.add_all([
+                ConstraintModel(
+                    task_id=task_id,
+                    constraint_type="ratchet",
+                    constraint_value="CONSTRAINT: add evidence",
+                    applied_to="writer",
+                ),
+                ConstraintModel(
+                    task_id=task_id,
+                    constraint_type="human",
+                    constraint_value="CONSTRAINT: expand pricing comparison",
+                    applied_to="analyst",
+                ),
+            ])
+            await session.commit()
+
+        result = await client.get(f"/api/tasks/{task_id}/constraints")
+        assert result.status_code == 200
+        values = [item["constraint_value"] for item in result.json()]
+        assert "CONSTRAINT: add evidence" in values
+        assert "CONSTRAINT: expand pricing comparison" in values
+
+    async def test_run_history_endpoints_return_runs_and_comparison(self, client: AsyncClient):
+        resp = await client.post("/api/tasks", json={"target_product": "RunHistoryTask"})
+        task_id = resp.json()["id"]
+
+        async with TestSession() as session:
+            session.add_all([
+                RunHistoryModel(
+                    task_id=task_id,
+                    run_index=1,
+                    status="completed",
+                    source_count=4,
+                    claim_count=8,
+                    evidence_coverage_rate=0.62,
+                    retry_count=1,
+                    manual_correction_count=2,
+                    qa_feedback={"passed": False},
+                    curation_summary={"input_count": 6, "kept_count": 4, "removed_count": 2},
+                ),
+                RunHistoryModel(
+                    task_id=task_id,
+                    run_index=2,
+                    status="completed",
+                    source_count=7,
+                    claim_count=10,
+                    evidence_coverage_rate=0.91,
+                    retry_count=0,
+                    manual_correction_count=2,
+                    qa_feedback={"passed": True},
+                    curation_summary={"input_count": 9, "kept_count": 7, "removed_count": 2},
+                ),
+            ])
+            await session.commit()
+
+        runs = await client.get(f"/api/tasks/{task_id}/runs")
+        assert runs.status_code == 200
+        assert [item["run_index"] for item in runs.json()] == [2, 1]
+        assert runs.json()[0]["curation_summary"]["kept_count"] == 7
+
+        compare = await client.get(f"/api/tasks/{task_id}/runs/latest/compare")
+        assert compare.status_code == 200
+        payload = compare.json()
+        assert payload["current"]["run_index"] == 2
+        assert payload["previous"]["run_index"] == 1
+        assert payload["current"]["curation_summary"]["input_count"] == 9
+        assert payload["delta"] == {
+            "source_count_delta": 3,
+            "claim_count_delta": 2,
+            "evidence_coverage_delta": 0.29,
+            "retry_count_delta": -1,
+            "manual_correction_delta": 0,
+        }
+
 
 class TestDagEndpoint:
     async def test_get_dag_structure(self, client: AsyncClient):
@@ -399,7 +760,7 @@ class TestDagEndpoint:
         assert "edges" in data
         node_ids = {n["id"] for n in data["nodes"]}
         assert node_ids == {
-            "collector", "survey", "interview", "fieldwork", "analyst",
+            "collector", "survey", "interview", "fieldwork", "curator", "analyst",
             "writer", "screenshot", "filter", "qa",
         }
 
@@ -414,7 +775,8 @@ class TestDagEndpoint:
         edge_pairs = {(e["source"], e["target"]) for e in data["edges"]}
         assert ("collector", "survey") in edge_pairs
         assert ("interview", "fieldwork") in edge_pairs
-        assert ("fieldwork", "analyst") in edge_pairs
+        assert ("fieldwork", "curator") in edge_pairs
+        assert ("curator", "analyst") in edge_pairs
         assert ("analyst", "writer") in edge_pairs
         assert ("qa", "collector") in edge_pairs
         assert ("qa", "analyst") in edge_pairs
