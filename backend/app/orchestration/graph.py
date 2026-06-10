@@ -1,6 +1,6 @@
 """LangGraph DAG with QA feedback loop.
 
-Flow: collect → survey → interview → fieldwork → analyze → write → screenshot → filter → qa → (qa_router)
+Flow: collect → survey → interview → fieldwork → curate → analyze → write → screenshot → filter → qa → (qa_router)
 The fieldwork node simulates running the designed survey + interview and folds
 the results back into the evidence pool as SURVEY/INTERVIEW sources.
 qa_router routes to END (pass) or back to collect/analyze/write (fail, up to MAX_RETRIES).
@@ -25,6 +25,7 @@ from app.guardrails.report_validator import validate_report_completeness
 from app.guardrails.schema_enforcer import enforce_competitive_schema
 from app.orchestration.state import PipelineState
 from app.schemas.trace import EventType, TraceEvent
+from app.services.curation import curate_sources, merge_source_sets
 from app.services.screenshot import screenshot_webpages
 
 logger = logging.getLogger(__name__)
@@ -74,8 +75,9 @@ async def collect_node(state: PipelineState) -> dict:
         "tokens": (llm_info.get("input_tokens", 0) or 0) + (llm_info.get("output_tokens", 0) or 0),
     })
     existing_traces = state.get("traces", [])
+    merged_sources = merge_source_sets(state.get("sources", []), result["sources"])
     return {
-        "sources": result["sources"],
+        "sources": merged_sources,
         "traces": existing_traces + result["traces"],
         "status": "surveying",
     }
@@ -162,7 +164,7 @@ async def fieldwork_node(state: PipelineState) -> dict:
     })
 
     new_sources = result.get("sources", [])
-    merged_sources = state.get("sources", []) + new_sources
+    merged_sources = merge_source_sets(state.get("sources", []), new_sources)
 
     llm_info = result.get("_llm_response", {})
     publish_event(task_id, {
@@ -176,6 +178,42 @@ async def fieldwork_node(state: PipelineState) -> dict:
         "fieldwork": result["fieldwork"],
         "sources": merged_sources,
         "traces": existing_traces + result["traces"],
+        "status": "curating",
+    }
+
+
+async def curate_node(state: PipelineState) -> dict:
+    """Deterministically curate evidence before passing it to Analyst."""
+    task_id = state.get("task_id", "")
+    logger.info("DAG: curate_node starting for task %s", task_id)
+    publish_event(task_id, {"agent": "curator", "status": "running"})
+
+    raw_sources = state.get("sources", [])
+    curated = curate_sources(raw_sources)
+    curated_sources = curated.sources
+    summary = curated.summary
+
+    existing_traces = state.get("traces", [])
+    trace = TraceEvent(
+        agent_name="curator",
+        event_type=EventType.OUTPUT,
+        output_summary=(
+            f"Curated {summary.get('kept_count', 0)}/{summary.get('input_count', 0)} sources; "
+            f"removed {summary.get('removed_count', 0)}"
+        ),
+        output_data=summary,
+    )
+    publish_event(task_id, {
+        "agent": "curator",
+        "status": "completed",
+        "kept_sources": summary.get("kept_count", 0),
+        "removed_sources": summary.get("removed_count", 0),
+    })
+    return {
+        "sources": curated.all_sources,
+        "curated_sources": curated_sources,
+        "curation_summary": summary,
+        "traces": existing_traces + [trace.model_dump()],
         "status": "analyzing",
     }
 
@@ -186,9 +224,10 @@ async def analyze_node(state: PipelineState) -> dict:
     logger.info("DAG: analyze_node starting for task %s", task_id)
     publish_event(task_id, {"agent": "analyst", "status": "running"})
     constraints = [c if isinstance(c, str) else str(c) for c in state.get("constraints", [])]
+    sources_for_analysis = state.get("curated_sources") or state.get("sources", [])
 
     result = await _analyst.run({
-        "sources": state.get("sources", []),
+        "sources": sources_for_analysis,
         "constraints": constraints,
     })
 
@@ -268,8 +307,8 @@ async def screenshot_node(state: PipelineState) -> dict:
         if isinstance(c, dict) and c.get("website"):
             urls_to_screenshot.append(c["website"])
 
-    # Add top source URLs (limit to avoid excessive screenshots)
-    sources = state.get("sources", [])
+    # Add top curated source URLs so screenshots follow the evidence actually used downstream.
+    sources = state.get("curated_sources") or state.get("sources", [])
     for s in sources[:5]:
         url = s.get("url", "")
         if url and url not in urls_to_screenshot:
@@ -341,7 +380,7 @@ async def qa_node(state: PipelineState) -> dict:
     publish_event(task_id, {"agent": "qa", "status": "running"})
 
     report = state.get("report", {})
-    sources = state.get("sources", [])
+    sources = state.get("curated_sources") or state.get("sources", [])
 
     # --- Deterministic hard validation (code-based, no LLM) ---
     hard_issues = validate_report_completeness(report, sources)
@@ -472,6 +511,7 @@ def build_graph() -> StateGraph:
     graph.add_node("survey", survey_node)
     graph.add_node("interview", interview_node)
     graph.add_node("fieldwork", fieldwork_node)
+    graph.add_node("curate", curate_node)
     graph.add_node("analyze", analyze_node)
     graph.add_node("write", write_node)
     graph.add_node("screenshot", screenshot_node)
@@ -482,7 +522,8 @@ def build_graph() -> StateGraph:
     graph.add_edge("collect", "survey")
     graph.add_edge("survey", "interview")
     graph.add_edge("interview", "fieldwork")
-    graph.add_edge("fieldwork", "analyze")
+    graph.add_edge("fieldwork", "curate")
+    graph.add_edge("curate", "analyze")
     graph.add_edge("analyze", "write")
     graph.add_edge("write", "screenshot")
     graph.add_edge("screenshot", "filter")

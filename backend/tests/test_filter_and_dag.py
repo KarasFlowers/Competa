@@ -3,7 +3,15 @@
 import pytest
 
 from app.agents.fieldwork import FieldworkAgent
-from app.orchestration.graph import filter_node, qa_router, MAX_RETRIES
+from app.orchestration import graph as graph_module
+from app.orchestration.graph import (
+    MAX_RETRIES,
+    curate_node,
+    filter_node,
+    qa_node,
+    qa_router,
+    screenshot_node,
+)
 
 
 class TestFilterNode:
@@ -93,12 +101,153 @@ class TestQaRouter:
         }
         assert qa_router(state) == "write"
 
+
+class TestCurateNode:
+    @pytest.mark.asyncio
+    async def test_curate_node_filters_duplicate_and_low_quality_sources(self):
+        state = {
+            "task_id": "t-curate",
+            "sources": [
+                {
+                    "id": "s1",
+                    "type": "url",
+                    "url": "https://example.com/pricing",
+                    "title": "Pricing",
+                    "content_snippet": "Official pricing page",
+                    "reliability_score": 0.9,
+                },
+                {
+                    "id": "s2",
+                    "type": "url",
+                    "url": "https://example.com/pricing?source=dup",
+                    "title": "Pricing dup",
+                    "content_snippet": "Official pricing page",
+                    "reliability_score": 0.91,
+                },
+                {
+                    "id": "s3",
+                    "type": "url",
+                    "url": "https://blog.example.net/post",
+                    "title": "Weak post",
+                    "content_snippet": "opinion only",
+                    "reliability_score": 0.4,
+                },
+                {
+                    "id": "s4",
+                    "type": "survey",
+                    "title": "[模拟] Survey",
+                    "content_snippet": "Primary signal",
+                    "reliability_score": 0.55,
+                },
+            ],
+            "traces": [],
+        }
+
+        result = await curate_node(state)
+        curated_ids = {item["id"] for item in result["curated_sources"]}
+        assert curated_ids == {"s1", "s4"}
+        assert result["curation_summary"]["removed_count"] == 2
+        assert result["status"] == "analyzing"
+        assert result["traces"][-1]["agent_name"] == "curator"
+
     def test_routes_to_write_when_unknown_target(self):
         state = {
             "qa_feedback": {"passed": False, "retry_target": "unknown"},
             "retry_count": 0,
         }
         assert qa_router(state) == "write"
+
+
+class TestCuratedSourceDownstreamUsage:
+    @pytest.mark.asyncio
+    async def test_screenshot_node_prefers_curated_sources(self, monkeypatch):
+        captured: dict[str, list[str]] = {}
+
+        async def fake_screenshot_webpages(urls, task_id):
+            captured["urls"] = list(urls)
+            captured["task_id"] = [task_id]
+            return [{"url": url, "path": f"/tmp/{index}.png"} for index, url in enumerate(urls, 1)]
+
+        monkeypatch.setattr(graph_module, "screenshot_webpages", fake_screenshot_webpages)
+
+        state = {
+            "task_id": "t-shot",
+            "task": {
+                "competitors": [
+                    {"name": "Comp A", "website": "https://comp-a.example.com"},
+                ],
+            },
+            "sources": [
+                {"id": "raw-1", "url": "https://raw.example.com"},
+            ],
+            "curated_sources": [
+                {"id": "cur-1", "url": "https://curated.example.com"},
+            ],
+            "traces": [],
+        }
+
+        result = await screenshot_node(state)
+
+        assert captured["urls"] == [
+            "https://comp-a.example.com",
+            "https://curated.example.com",
+        ]
+        assert result["status"] == "filtering"
+        assert len(result["screenshot_paths"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_qa_node_prefers_curated_sources(self, monkeypatch):
+        captured: dict[str, list[dict]] = {}
+
+        def fake_validate_report_completeness(report, sources, **kwargs):
+            captured["validated_sources"] = list(sources)
+            return []
+
+        def fake_enforce_competitive_schema(analysis, competitors):
+            return []
+
+        async def fake_qa_run(input_data):
+            captured["qa_sources"] = list(input_data["sources"])
+            return {
+                "qa_feedback": {
+                    "passed": True,
+                    "issues": [],
+                    "retry_target": "",
+                    "constraints": [],
+                },
+                "metrics": {
+                    "source_count": len(input_data["sources"]),
+                    "claim_count": 1,
+                    "evidence_coverage_rate": 1.0,
+                },
+                "handoff": {},
+                "traces": [],
+                "_llm_response": {"input_tokens": 1, "output_tokens": 1, "duration": 0.1},
+            }
+
+        monkeypatch.setattr(graph_module, "validate_report_completeness", fake_validate_report_completeness)
+        monkeypatch.setattr(graph_module, "enforce_competitive_schema", fake_enforce_competitive_schema)
+        monkeypatch.setattr(graph_module._qa, "run", fake_qa_run)
+
+        curated_sources = [{"id": "cur-1", "title": "Curated"}]
+        raw_sources = [{"id": "raw-1", "title": "Raw"}]
+        state = {
+            "task_id": "t-qa",
+            "task": {"competitors": []},
+            "report": {"title": "Report", "executive_summary": "x" * 60, "sections": []},
+            "analysis": {},
+            "sources": raw_sources,
+            "curated_sources": curated_sources,
+            "traces": [],
+            "retry_count": 0,
+        }
+
+        result = await qa_node(state)
+
+        assert captured["validated_sources"] == curated_sources
+        assert captured["qa_sources"] == curated_sources
+        assert result["metrics"]["source_count"] == 1
+        assert result["status"] == "completed"
 
 
 class TestFieldworkSources:
@@ -171,4 +320,4 @@ class TestFieldworkSources:
         result = await graph.fieldwork_node(state)
         ids = {s["id"] for s in result["sources"]}
         assert ids == {"web1", "fw1"}
-        assert result["status"] == "analyzing"
+        assert result["status"] == "curating"

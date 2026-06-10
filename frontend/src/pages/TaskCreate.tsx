@@ -25,6 +25,7 @@ export default function TaskCreate() {
   const { toast } = useToast();
   const [industry, setIndustry] = useState("");
   const [targetProduct, setTargetProduct] = useState("");
+  const [focusAreas, setFocusAreas] = useState("");
   const [ourProductNotes, setOurProductNotes] = useState("");
   const [competitors, setCompetitors] = useState<CompetitorForm[]>([emptyCompetitor()]);
   const [loading, setLoading] = useState(false);
@@ -41,6 +42,10 @@ export default function TaskCreate() {
     e.preventDefault();
     setLoading(true);
     try {
+      const normalizedFocusAreas = focusAreas
+        .split(/[\n,，]/)
+        .map((item) => item.trim())
+        .filter(Boolean);
       const compPayload: CompetitorInput[] = competitors
         .filter((c) => c.name.trim())
         .map((c) => ({
@@ -53,6 +58,7 @@ export default function TaskCreate() {
         industry,
         target_product: targetProduct,
         competitors: compPayload,
+        focus_areas: normalizedFocusAreas,
         our_product_notes: ourProductNotes,
       });
       navigate(`/tasks/${resp.data.id}`);
@@ -106,6 +112,19 @@ export default function TaskCreate() {
             value={ourProductNotes}
             onChange={(e) => setOurProductNotes(e.target.value)}
             placeholder="简要描述你的产品定位、核心优势、目标用户等（可选）"
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            重点分析维度
+          </label>
+          <textarea
+            rows={2}
+            value={focusAreas}
+            onChange={(e) => setFocusAreas(e.target.value)}
+            placeholder="例如：定价策略、功能深度、用户画像、销售打法。可用逗号或换行分隔。"
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           />
         </div>

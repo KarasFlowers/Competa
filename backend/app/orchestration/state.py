@@ -9,6 +9,8 @@ class PipelineState(TypedDict, total=False):
     task_id: str
     task: dict[str, Any]
     sources: list[dict[str, Any]]
+    curated_sources: list[dict[str, Any]]
+    curation_summary: dict[str, Any]
     survey: dict[str, Any]
     interview: dict[str, Any]
     fieldwork: dict[str, Any]

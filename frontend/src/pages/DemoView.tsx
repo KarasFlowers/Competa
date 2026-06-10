@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   demoApi,
@@ -9,8 +9,17 @@ import {
 } from "../api/client";
 import { ArrowLeft, Clock, FileText, BarChart3, ShieldCheck } from "lucide-react";
 import { ReliabilityBadge } from "../components/ReliabilityBadge";
-import ComparisonMatrix from "../components/ComparisonMatrix";
 import type { AnalysisData } from "../api/client";
+
+const LazyComparisonMatrix = lazy(() => import("../components/ComparisonMatrix"));
+
+function SectionLoading({ label }: { label: string }) {
+  return (
+    <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 px-4 py-8 text-center text-sm text-gray-500">
+      {label}
+    </div>
+  );
+}
 
 export default function DemoView() {
   const { scenarioId } = useParams<{ scenarioId: string }>();
@@ -58,9 +67,9 @@ export default function DemoView() {
 
       {/* Metrics bar */}
       <div className="grid grid-cols-4 gap-4">
-        <MetricCard icon={FileText} label="Sources" value={scenario.metrics.source_count} />
+        <MetricCard icon={FileText} label="分析证据" value={scenario.metrics.source_count} />
         <MetricCard icon={BarChart3} label="Claims" value={scenario.metrics.claim_count} />
-        <MetricCard icon={ShieldCheck} label="Evidence Coverage" value={`${(scenario.metrics.evidence_coverage_rate * 100).toFixed(0)}%`} />
+        <MetricCard icon={ShieldCheck} label="证据覆盖率" value={`${(scenario.metrics.evidence_coverage_rate * 100).toFixed(0)}%`} />
         <MetricCard icon={Clock} label="Pipeline Time" value={`${scenario.traces.reduce((s, t) => s + (t.total_duration ?? 0), 0).toFixed(1)}s`} />
       </div>
 
@@ -108,7 +117,9 @@ export default function DemoView() {
 
       {/* Comparison Matrix + SWOT (structured analysis) */}
       {scenario.analysis && (
-        <ComparisonMatrix analysis={scenario.analysis as AnalysisData} />
+        <Suspense fallback={<SectionLoading label="正在加载结构化分析视图..." />}>
+          <LazyComparisonMatrix analysis={scenario.analysis as AnalysisData} />
+        </Suspense>
       )}
 
       {/* Report sections */}
@@ -124,7 +135,7 @@ export default function DemoView() {
       {/* Sources list */}
       {scenario.sources.length > 0 && (
         <section className="border-t border-gray-200 pt-6">
-          <h2 className="text-lg font-semibold text-gray-800 mb-3">Sources</h2>
+          <h2 className="text-lg font-semibold text-gray-800 mb-3">分析证据</h2>
           <ol className="list-decimal list-inside space-y-2">
             {scenario.sources.map((s) => (
               <li key={s.id} className="text-sm flex items-center gap-2">

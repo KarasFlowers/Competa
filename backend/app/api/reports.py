@@ -36,6 +36,10 @@ class SourceResponse(BaseModel):
     title: str
     content_snippet: str
     reliability_score: float = 0.5
+    included_in_analysis: bool = False
+    curation_reason: str = ""
+    curation_tags: list[str] = []
+    curated_excerpt: str = ""
     fetched_at: datetime
 
     model_config = {"from_attributes": True}
@@ -61,7 +65,14 @@ async def get_report(task_id: str, session: AsyncSession = Depends(get_session))
 @router.get("/{task_id}/sources", response_model=list[SourceResponse])
 async def get_sources(task_id: str, session: AsyncSession = Depends(get_session)):
     result = await session.execute(
-        select(SourceModel).where(SourceModel.task_id == task_id)
+        select(SourceModel)
+        .where(SourceModel.task_id == task_id)
+        .order_by(
+            SourceModel.included_in_analysis.desc(),
+            SourceModel.reliability_score.desc(),
+            SourceModel.fetched_at.desc(),
+            SourceModel.id.desc(),
+        )
     )
     return result.scalars().all()
 
@@ -118,10 +129,28 @@ async def export_report(
 
     # Fetch sources
     src_result = await session.execute(
-        select(SourceModel).where(SourceModel.task_id == task_id)
+        select(SourceModel)
+        .where(SourceModel.task_id == task_id)
+        .order_by(
+            SourceModel.included_in_analysis.desc(),
+            SourceModel.reliability_score.desc(),
+            SourceModel.fetched_at.desc(),
+            SourceModel.id.desc(),
+        )
     )
     sources = [
-        {"id": s.id, "type": s.type, "url": s.url, "title": s.title, "content_snippet": s.content_snippet}
+        {
+            "id": s.id,
+            "type": s.type,
+            "url": s.url,
+            "title": s.title,
+            "content_snippet": s.content_snippet,
+            "reliability_score": s.reliability_score,
+            "included_in_analysis": s.included_in_analysis,
+            "curation_reason": s.curation_reason,
+            "curation_tags": s.curation_tags or [],
+            "curated_excerpt": s.curated_excerpt or "",
+        }
         for s in src_result.scalars().all()
     ]
 

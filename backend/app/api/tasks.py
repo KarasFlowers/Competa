@@ -15,6 +15,7 @@ from app.models.database import (
     InterviewModel,
     MetricsModel,
     ReportModel,
+    RunHistoryModel,
     SourceModel,
     SurveyModel,
     TaskModel,
@@ -31,6 +32,7 @@ ACTIVE_TASK_STATUSES = (
     "surveying",
     "interviewing",
     "fieldwork",
+    "curating",
     "analyzing",
     "writing",
     "screenshotting",
@@ -49,6 +51,17 @@ def _create_tracked_task(coro) -> asyncio.Task:
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
     return task
+
+
+def _normalize_focus_areas(values: list[str] | None) -> list[str]:
+    if not values:
+        return []
+    normalized: list[str] = []
+    for value in values:
+        cleaned = value.strip()
+        if cleaned and cleaned not in normalized:
+            normalized.append(cleaned)
+    return normalized
 
 
 def _find_claim_recursive(sections: list[dict], claim_id: str) -> dict | None:
@@ -80,6 +93,7 @@ class TaskCreate(BaseModel):
     industry: str = ""
     target_product: str
     competitors: list[str | CompetitorInput] = Field(default_factory=list)
+    focus_areas: list[str] = Field(default_factory=list)
     our_product_notes: str = ""  # context about our own product
 
 
@@ -88,7 +102,12 @@ class TaskResponse(BaseModel):
     industry: str
     target_product: str
     competitors: list[str | CompetitorInput]
+    focus_areas: list[str] = Field(default_factory=list)
     our_product_notes: str = ""
+    manual_correction_count: int = 0
+    last_qa_feedback: dict = Field(default_factory=dict)
+    last_handoff: dict = Field(default_factory=dict)
+    last_curation_summary: dict = Field(default_factory=dict)
     status: str
     created_at: datetime
     updated_at: datetime
@@ -116,10 +135,15 @@ class TaskOverviewItem(BaseModel):
     industry: str
     target_product: str
     competitors: list[str | CompetitorInput]
+    focus_areas: list[str] = Field(default_factory=list)
     our_product_notes: str = ""
     status: str
     created_at: datetime
     updated_at: datetime
+    manual_correction_count: int = 0
+    last_qa_feedback: dict = Field(default_factory=dict)
+    last_handoff: dict = Field(default_factory=dict)
+    last_curation_summary: dict = Field(default_factory=dict)
     metrics: TaskMetricsSummary | None = None
     artifacts: TaskArtifactSummary
 
@@ -176,6 +200,7 @@ async def create_task(body: TaskCreate, session: AsyncSession = Depends(get_sess
         industry=body.industry,
         target_product=body.target_product,
         competitors=competitors_data,
+        focus_areas=_normalize_focus_areas(body.focus_areas),
         our_product_notes=body.our_product_notes,
     )
     session.add(task)
@@ -228,10 +253,15 @@ async def get_tasks_overview(session: AsyncSession = Depends(get_session)):
                 industry=task.industry,
                 target_product=task.target_product,
                 competitors=task.competitors or [],
+                focus_areas=task.focus_areas or [],
                 our_product_notes=task.our_product_notes or "",
                 status=task.status,
                 created_at=task.created_at,
                 updated_at=task.updated_at,
+                manual_correction_count=task.manual_correction_count or 0,
+                last_qa_feedback=task.last_qa_feedback or {},
+                last_handoff=task.last_handoff or {},
+                last_curation_summary=task.last_curation_summary or {},
                 metrics=metrics_summary,
                 artifacts=TaskArtifactSummary(
                     report=task.id in report_ids,
@@ -305,9 +335,16 @@ async def run_task(task_id: str, session: AsyncSession = Depends(get_session)):
         TraceModel,
         MetricsModel,
         ConstraintModel,
+        SurveyModel,
+        InterviewModel,
+        AnalysisModel,
     ):
         await session.execute(delete(model).where(model.task_id == task_id))
 
+    task.manual_correction_count = 0
+    task.last_qa_feedback = {}
+    task.last_handoff = {}
+    task.last_curation_summary = {}
     await session.commit()
 
     # Launch pipeline in background with exception logging only after claim is committed.
@@ -352,6 +389,46 @@ class CorrectionResponse(BaseModel):
     task_id: str
 
 
+class ConstraintSummary(BaseModel):
+    id: str
+    constraint_type: str
+    constraint_value: str
+    applied_to: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class RunHistorySummary(BaseModel):
+    id: str
+    run_index: int
+    status: str
+    retry_count: int
+    source_count: int
+    claim_count: int
+    evidence_coverage_rate: float
+    manual_correction_count: int
+    created_at: datetime
+    qa_feedback: dict = Field(default_factory=dict)
+    curation_summary: dict = Field(default_factory=dict)
+
+    model_config = {"from_attributes": True}
+
+
+class RunHistoryDelta(BaseModel):
+    source_count_delta: int
+    claim_count_delta: int
+    evidence_coverage_delta: float
+    retry_count_delta: int
+    manual_correction_delta: int
+
+
+class RunHistoryCompareResponse(BaseModel):
+    current: RunHistorySummary
+    previous: RunHistorySummary | None = None
+    delta: RunHistoryDelta | None = None
+
+
 @router.post("/{task_id}/corrections", response_model=CorrectionResponse)
 async def submit_correction(
     task_id: str,
@@ -384,6 +461,7 @@ async def submit_correction(
             applied_to="collector",
         )
         session.add(constraint)
+        task.manual_correction_count += 1
 
     elif ctype == "edit_claim":
         # Find report and update the specific claim
@@ -409,6 +487,7 @@ async def submit_correction(
         metrics = mresult.scalars().first()
         if metrics:
             metrics.manual_correction_count += 1
+        task.manual_correction_count += 1
 
     elif ctype == "add_constraint":
         constraint = ConstraintModel(
@@ -418,12 +497,72 @@ async def submit_correction(
             applied_to=data.get("applied_to", "writer"),
         )
         session.add(constraint)
+        task.manual_correction_count += 1
 
     else:
         raise HTTPException(status_code=400, detail=f"Unknown correction_type: {ctype}")
 
+    task.updated_at = datetime.now(UTC)
     await session.commit()
     return CorrectionResponse(message="Correction applied", task_id=task_id)
+
+
+@router.get("/{task_id}/constraints", response_model=list[ConstraintSummary])
+async def get_task_constraints(task_id: str, session: AsyncSession = Depends(get_session)):
+    task = await session.get(TaskModel, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    result = await session.execute(
+        select(ConstraintModel)
+        .where(ConstraintModel.task_id == task_id)
+        .order_by(ConstraintModel.created_at.desc(), ConstraintModel.id.desc())
+    )
+    return result.scalars().all()
+
+
+@router.get("/{task_id}/runs", response_model=list[RunHistorySummary])
+async def get_task_runs(task_id: str, session: AsyncSession = Depends(get_session)):
+    task = await session.get(TaskModel, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    result = await session.execute(
+        select(RunHistoryModel)
+        .where(RunHistoryModel.task_id == task_id)
+        .order_by(RunHistoryModel.run_index.desc(), RunHistoryModel.created_at.desc())
+    )
+    return result.scalars().all()
+
+
+@router.get("/{task_id}/runs/latest/compare", response_model=RunHistoryCompareResponse)
+async def compare_latest_runs(task_id: str, session: AsyncSession = Depends(get_session)):
+    task = await session.get(TaskModel, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    result = await session.execute(
+        select(RunHistoryModel)
+        .where(RunHistoryModel.task_id == task_id)
+        .order_by(RunHistoryModel.run_index.desc(), RunHistoryModel.created_at.desc())
+    )
+    runs = result.scalars().all()
+    if not runs:
+        raise HTTPException(status_code=404, detail="Run history not found")
+
+    current = runs[0]
+    previous = runs[1] if len(runs) > 1 else None
+    delta = None
+    if previous:
+        delta = RunHistoryDelta(
+            source_count_delta=current.source_count - previous.source_count,
+            claim_count_delta=current.claim_count - previous.claim_count,
+            evidence_coverage_delta=round(current.evidence_coverage_rate - previous.evidence_coverage_rate, 4),
+            retry_count_delta=current.retry_count - previous.retry_count,
+            manual_correction_delta=current.manual_correction_count - previous.manual_correction_count,
+        )
+
+    return RunHistoryCompareResponse(current=current, previous=previous, delta=delta)
 
 
 # ---------------------------------------------------------------------------
@@ -436,6 +575,7 @@ _DAG_NODES = [
     {"id": "survey", "label": "问卷设计", "type": "agent"},
     {"id": "interview", "label": "访谈设计", "type": "agent"},
     {"id": "fieldwork", "label": "调研执行", "type": "agent"},
+    {"id": "curator", "label": "证据筛选", "type": "tool"},
     {"id": "analyst", "label": "分析", "type": "agent"},
     {"id": "writer", "label": "报告撰写", "type": "agent"},
     {"id": "screenshot", "label": "截图采集", "type": "tool"},
@@ -447,7 +587,8 @@ _DAG_EDGES = [
     {"source": "collector", "target": "survey"},
     {"source": "survey", "target": "interview"},
     {"source": "interview", "target": "fieldwork"},
-    {"source": "fieldwork", "target": "analyst"},
+    {"source": "fieldwork", "target": "curator"},
+    {"source": "curator", "target": "analyst"},
     {"source": "analyst", "target": "writer"},
     {"source": "writer", "target": "screenshot"},
     {"source": "screenshot", "target": "filter"},
@@ -463,6 +604,7 @@ _STATUS_TO_RUNNING_NODE = {
     "surveying": "survey",
     "interviewing": "interview",
     "fieldwork": "fieldwork",
+    "curating": "curator",
     "analyzing": "analyst",
     "writing": "writer",
     "screenshotting": "screenshot",
@@ -550,11 +692,14 @@ async def rerun_task(task_id: str, session: AsyncSession = Depends(get_session))
             detail=f"Task is in '{task.status}' state, cannot rerun",
         )
 
-    # Only clear report/traces/metrics, keep sources and constraints
-    for model in (ReportModel, TraceModel, MetricsModel):
+    # Clear generated artifacts from the last run, but keep sources and constraints.
+    for model in (ReportModel, TraceModel, MetricsModel, SurveyModel, InterviewModel, AnalysisModel):
         await session.execute(delete(model).where(model.task_id == task_id))
 
     task.status = "collecting"
+    task.last_qa_feedback = {}
+    task.last_handoff = {}
+    task.last_curation_summary = {}
     task.updated_at = datetime.now(UTC)
     await session.commit()
 

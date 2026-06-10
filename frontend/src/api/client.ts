@@ -13,12 +13,26 @@ export interface CompetitorInput {
   tags?: string[];
 }
 
+export interface CurationSummary {
+  input_count?: number;
+  kept_count?: number;
+  removed_count?: number;
+  first_party_count?: number;
+  avg_reliability?: number;
+  removed_reasons?: Record<string, number>;
+}
+
 export interface Task {
   id: string;
   industry: string;
   target_product: string;
   competitors: (string | CompetitorInput)[];
+  focus_areas: string[];
   our_product_notes: string;
+  manual_correction_count: number;
+  last_qa_feedback: Record<string, unknown>;
+  last_handoff: Record<string, unknown>;
+  last_curation_summary: CurationSummary;
   status: string;
   created_at: string;
   updated_at: string;
@@ -63,6 +77,7 @@ export interface TaskCreatePayload {
   industry?: string;
   target_product: string;
   competitors?: (string | CompetitorInput)[];
+  focus_areas?: string[];
   our_product_notes?: string;
 }
 
@@ -74,6 +89,8 @@ export interface Report {
   status: string;
   created_at: string;
 }
+
+export type ReportExportFormat = "markdown" | "docx";
 
 export interface ReportContent {
   title?: string;
@@ -105,6 +122,10 @@ export interface Source {
   title: string;
   content_snippet: string;
   reliability_score?: number;
+  included_in_analysis: boolean;
+  curation_reason: string;
+  curation_tags: string[];
+  curated_excerpt: string;
   fetched_at: string;
 }
 
@@ -149,6 +170,42 @@ export interface CorrectionPayload {
   data: Record<string, unknown>;
 }
 
+export interface ConstraintSummary {
+  id: string;
+  constraint_type: string;
+  constraint_value: string;
+  applied_to: string;
+  created_at: string;
+}
+
+export interface RunHistorySummary {
+  id: string;
+  run_index: number;
+  status: string;
+  retry_count: number;
+  source_count: number;
+  claim_count: number;
+  evidence_coverage_rate: number;
+  manual_correction_count: number;
+  created_at: string;
+  qa_feedback: Record<string, unknown>;
+  curation_summary: CurationSummary;
+}
+
+export interface RunHistoryDelta {
+  source_count_delta: number;
+  claim_count_delta: number;
+  evidence_coverage_delta: number;
+  retry_count_delta: number;
+  manual_correction_delta: number;
+}
+
+export interface RunHistoryCompareResponse {
+  current: RunHistorySummary;
+  previous: RunHistorySummary | null;
+  delta: RunHistoryDelta | null;
+}
+
 export interface SSEEvent {
   agent: string;
   status: string;
@@ -170,11 +227,16 @@ export const taskApi = {
   getStatus: (id: string) => api.get<{ id: string; status: string; target_product: string }>(`/tasks/${id}/status`),
   submitCorrection: (id: string, correction: CorrectionPayload) =>
     api.post<{ message: string; task_id: string }>(`/tasks/${id}/corrections`, correction),
+  constraints: (id: string) => api.get<ConstraintSummary[]>(`/tasks/${id}/constraints`),
+  runs: (id: string) => api.get<RunHistorySummary[]>(`/tasks/${id}/runs`),
+  compareLatestRuns: (id: string) => api.get<RunHistoryCompareResponse>(`/tasks/${id}/runs/latest/compare`),
   rerun: (id: string) => api.post<{ message: string; task_id: string }>(`/tasks/${id}/rerun`),
 };
 
 export const reportApi = {
   get: (taskId: string) => api.get<Report>(`/tasks/${taskId}/report`),
+  exportUrl: (taskId: string, format: ReportExportFormat) =>
+    `/api/tasks/${taskId}/export?format=${encodeURIComponent(format)}`,
 };
 
 export const sourceApi = {

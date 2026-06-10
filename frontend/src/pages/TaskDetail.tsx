@@ -1,15 +1,41 @@
-import { useEffect, useState, useRef } from "react";
+import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import { taskApi, metricsApi, type Task, type Metrics, type SSEEvent } from "../api/client";
+import {
+  taskApi,
+  metricsApi,
+  analysisApi,
+  type AnalysisData,
+  type CurationSummary,
+  type ConstraintSummary,
+  type RunHistoryCompareResponse,
+  type RunHistorySummary,
+  type Task,
+  type Metrics,
+  type SSEEvent,
+} from "../api/client";
 import { useToast } from "../components/Toast";
-import { Activity, Plus, RefreshCw, ClipboardList, MessageSquareText } from "lucide-react";
-import DagView from "../components/DagView";
+import {
+  Activity,
+  AlertTriangle,
+  ClipboardList,
+  Layers3,
+  MessageSquareText,
+  Plus,
+  RefreshCw,
+  ShieldCheck,
+  Sparkles,
+  TrendingUp,
+} from "lucide-react";
+
+const LazyDagView = lazy(() => import("../components/DagView"));
+const LazyComparisonMatrix = lazy(() => import("../components/ComparisonMatrix"));
 
 const ACTIVE_STATUSES = new Set([
   "collecting",
   "surveying",
   "interviewing",
   "fieldwork",
+  "curating",
   "analyzing",
   "writing",
   "screenshotting",
@@ -24,6 +50,7 @@ const STATUS_COLORS: Record<string, string> = {
   surveying: "bg-cyan-100 text-cyan-700",
   interviewing: "bg-teal-100 text-teal-700",
   fieldwork: "bg-emerald-100 text-emerald-700",
+  curating: "bg-sky-100 text-sky-700",
   analyzing: "bg-indigo-100 text-indigo-700",
   writing: "bg-purple-100 text-purple-700",
   screenshotting: "bg-fuchsia-100 text-fuchsia-700",
@@ -34,11 +61,47 @@ const STATUS_COLORS: Record<string, string> = {
   failed: "bg-red-100 text-red-700",
 };
 
+const CURATION_REASON_LABELS: Record<string, string> = {
+  selected: "已纳入分析",
+  duplicate_url: "重复 URL",
+  duplicate_content: "重复内容",
+  low_reliability: "低可信度",
+  domain_cap: "单域名来源过多",
+  max_source_cap: "超过来源上限",
+};
+
+function getCurationReasonLabel(reason: string) {
+  return CURATION_REASON_LABELS[reason] ?? reason.replace(/_/g, " ");
+}
+
+function hasCurationSummary(summary: CurationSummary | null | undefined) {
+  return Boolean(summary && Object.keys(summary).length > 0);
+}
+
+function formatReliability(value: number | undefined) {
+  if (value === undefined) {
+    return "--";
+  }
+  return `${(value * 100).toFixed(0)}%`;
+}
+
+function SectionLoading({ label }: { label: string }) {
+  return (
+    <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 px-4 py-8 text-center text-sm text-gray-500">
+      {label}
+    </div>
+  );
+}
+
 export default function TaskDetail() {
   const { id } = useParams<{ id: string }>();
   const { toast } = useToast();
   const [task, setTask] = useState<Task | null>(null);
   const [metrics, setMetrics] = useState<Metrics | null>(null);
+  const [analysis, setAnalysis] = useState<AnalysisData | null>(null);
+  const [constraints, setConstraints] = useState<ConstraintSummary[]>([]);
+  const [runs, setRuns] = useState<RunHistorySummary[]>([]);
+  const [runCompare, setRunCompare] = useState<RunHistoryCompareResponse | null>(null);
   const [polling, setPolling] = useState(false);
   const [error, setError] = useState("");
   const [sseEvent, setSseEvent] = useState<SSEEvent | null>(null);
@@ -47,16 +110,36 @@ export default function TaskDetail() {
   
   const eventSourceRef = useRef<EventSource | null>(null);
 
-  useEffect(() => {
-    if (!id) return;
-    taskApi.get(id).then((r) => {
+  const loadTaskSnapshot = async (taskId: string, mode: "full" | "status" = "full") => {
+    const taskPromise = taskApi.get(taskId).then((r) => {
       setTask(r.data);
       setPolling(ACTIVE_STATUSES.has(r.data.status));
       if (ACTIVE_STATUSES.has(r.data.status)) {
         setMetrics(null);
+        if (mode === "full") {
+          setAnalysis(null);
+        }
       }
-    }).catch(() => setError("Task not found"));
-    metricsApi.get(id).then((r) => setMetrics(r.data)).catch(() => {});
+    });
+
+    if (mode === "status") {
+      await taskPromise;
+      return;
+    }
+
+    await Promise.all([
+      taskPromise,
+      metricsApi.get(taskId).then((r) => setMetrics(r.data)).catch(() => setMetrics(null)),
+      analysisApi.get(taskId).then((r) => setAnalysis(r.data)).catch(() => setAnalysis(null)),
+      taskApi.constraints(taskId).then((r) => setConstraints(r.data)).catch(() => setConstraints([])),
+      taskApi.runs(taskId).then((r) => setRuns(r.data)).catch(() => setRuns([])),
+      taskApi.compareLatestRuns(taskId).then((r) => setRunCompare(r.data)).catch(() => setRunCompare(null)),
+    ]);
+  };
+
+  useEffect(() => {
+    if (!id) return;
+    loadTaskSnapshot(id).catch(() => setError("Task not found"));
   }, [id]);
 
   // Set up SSE when running
@@ -111,7 +194,7 @@ export default function TaskDetail() {
           if (eventSourceRef.current) {
             eventSourceRef.current.close();
           }
-          metricsApi.get(id).then((r) => setMetrics(r.data)).catch(() => {});
+          loadTaskSnapshot(id).catch(() => {});
         }
       } catch {}
     }, 2000);
@@ -124,9 +207,20 @@ export default function TaskDetail() {
       setError("");
       await taskApi.run(id);
       setMetrics(null);
+      setAnalysis(null);
       setPolling(true);
       setSseEvent(null);
-      setTask((prev) => (prev ? { ...prev, status: "collecting" } : prev));
+      setTask((prev) => (
+        prev
+          ? {
+              ...prev,
+              status: "collecting",
+              last_qa_feedback: {},
+              last_handoff: {},
+              last_curation_summary: {},
+            }
+          : prev
+      ));
     } catch (e: any) {
       setError(e.response?.data?.detail || "Failed to start pipeline");
     }
@@ -138,9 +232,20 @@ export default function TaskDetail() {
       setError("");
       await taskApi.rerun(id);
       setMetrics(null);
+      setAnalysis(null);
       setPolling(true);
       setSseEvent(null);
-      setTask((prev) => (prev ? { ...prev, status: "collecting" } : prev));
+      setTask((prev) => (
+        prev
+          ? {
+              ...prev,
+              status: "collecting",
+              last_qa_feedback: {},
+              last_handoff: {},
+              last_curation_summary: {},
+            }
+          : prev
+      ));
     } catch (e: any) {
       setError(e.response?.data?.detail || "Failed to restart pipeline");
     }
@@ -156,6 +261,7 @@ export default function TaskDetail() {
       });
       setShowSourceModal(false);
       setNewSource({ title: "", url: "", content_snippet: "", type: "url" });
+      loadTaskSnapshot(id).catch(() => {});
       // Suggest rerun
       toast("资料已补充！请点击「重新生成」以纳入新资料并修正报告。", "success");
     } catch (err) {
@@ -167,6 +273,16 @@ export default function TaskDetail() {
   if (!task) return <div className="p-8 text-gray-500">Loading...</div>;
 
   const statusClass = STATUS_COLORS[task.status] || "bg-gray-100 text-gray-700";
+  const qaPassed = task.last_qa_feedback?.passed === true;
+  const qaIssues = Array.isArray(task.last_qa_feedback?.issues)
+    ? (task.last_qa_feedback.issues as Array<Record<string, unknown>>)
+    : [];
+  const handoff = typeof task.last_handoff === "object" && task.last_handoff
+    ? (task.last_handoff as Record<string, unknown>)
+    : {};
+  const curationSummary = task.last_curation_summary ?? {};
+  const curationReady = hasCurationSummary(curationSummary);
+  const removedReasons = Object.entries(curationSummary.removed_reasons ?? {}).sort((a, b) => b[1] - a[1]);
 
   return (
     <div className="max-w-4xl mx-auto p-6 space-y-8">
@@ -267,15 +383,274 @@ export default function TaskDetail() {
         </div>
       </section>
 
+      {(task.focus_areas?.length > 0 || task.our_product_notes) && (
+        <section className="grid gap-4 md:grid-cols-2">
+          <div className="rounded-2xl border border-gray-200 bg-white p-5">
+            <div className="flex items-center gap-2 text-gray-900">
+              <Layers3 className="h-4 w-4 text-blue-600" />
+              <h2 className="text-lg font-semibold">分析边界</h2>
+            </div>
+            {task.focus_areas?.length > 0 ? (
+              <div className="mt-4 flex flex-wrap gap-2">
+                {task.focus_areas.map((area) => (
+                  <span key={area} className="rounded-full bg-blue-50 px-3 py-1 text-sm text-blue-700">
+                    {area}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-4 text-sm text-gray-500">当前没有显式指定重点分析维度。</p>
+            )}
+          </div>
+
+          <div className="rounded-2xl border border-gray-200 bg-white p-5">
+            <div className="flex items-center gap-2 text-gray-900">
+              <Sparkles className="h-4 w-4 text-blue-600" />
+              <h2 className="text-lg font-semibold">我方产品上下文</h2>
+            </div>
+            <p className="mt-4 text-sm leading-6 text-gray-600">
+              {task.our_product_notes?.trim() || "当前没有补充我方产品说明。"}
+            </p>
+          </div>
+        </section>
+      )}
+
       {/* Metrics */}
       {metrics && (
         <section>
-          <h2 className="text-lg font-semibold text-gray-800 mb-3">Quality Metrics</h2>
+          <h2 className="text-lg font-semibold text-gray-800 mb-3">质量指标</h2>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <MetricCard label="Sources" value={metrics.source_count} />
-            <MetricCard label="Claims" value={metrics.claim_count} />
-            <MetricCard label="Evidence Coverage" value={`${(metrics.evidence_coverage_rate * 100).toFixed(1)}%`} />
-            <MetricCard label="Manual Corrections" value={metrics.manual_correction_count} />
+            <MetricCard label="分析证据" value={metrics.source_count} />
+            <MetricCard label="结论数" value={metrics.claim_count} />
+            <MetricCard label="证据覆盖率" value={`${(metrics.evidence_coverage_rate * 100).toFixed(1)}%`} />
+            <MetricCard label="人工修正" value={metrics.manual_correction_count} />
+          </div>
+          <p className="mt-3 text-sm text-gray-500">
+            这里的“分析证据”指最终纳入分析链路的来源，不包含被筛除的候选资料。
+          </p>
+        </section>
+      )}
+
+      {!polling && (
+        <section className="rounded-2xl border border-gray-200 bg-white p-5">
+          <div className="flex items-center gap-2 text-gray-900">
+            <Sparkles className="h-4 w-4 text-blue-600" />
+            <h2 className="text-lg font-semibold">最近一次证据筛选</h2>
+          </div>
+          {curationReady ? (
+            <div className="mt-4 space-y-4">
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+                <MetricCard label="候选来源" value={curationSummary.input_count ?? 0} />
+                <MetricCard label="纳入分析" value={curationSummary.kept_count ?? 0} />
+                <MetricCard label="已筛除" value={curationSummary.removed_count ?? 0} />
+                <MetricCard label="一手证据" value={curationSummary.first_party_count ?? 0} />
+                <MetricCard label="平均可信度" value={formatReliability(curationSummary.avg_reliability)} />
+              </div>
+              {removedReasons.length > 0 ? (
+                <div>
+                  <div className="text-sm font-medium text-gray-700">主要筛除原因</div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {removedReasons.map(([reason, count]) => (
+                      <span
+                        key={reason}
+                        className="rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700"
+                      >
+                        {getCurationReasonLabel(reason)} {count} 条
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <p className="text-sm text-gray-500">
+                  本次没有记录明确的筛除原因，说明大多数来源都被直接纳入分析。
+                </p>
+              )}
+            </div>
+          ) : (
+            <p className="mt-4 text-sm text-gray-500">任务尚未完成证据筛选，运行完成后这里会展示筛选结果。</p>
+          )}
+        </section>
+      )}
+
+      {!polling && analysis && (
+        <section className="space-y-3">
+          <div className="flex items-center gap-2 text-gray-900">
+            <Sparkles className="h-4 w-4 text-blue-600" />
+            <h2 className="text-lg font-semibold">结构化分析产物</h2>
+          </div>
+          <Suspense fallback={<SectionLoading label="正在加载结构化分析视图..." />}>
+            <LazyComparisonMatrix analysis={analysis} />
+          </Suspense>
+        </section>
+      )}
+
+      {!polling && runCompare?.current && (
+        <section className="rounded-2xl border border-gray-200 bg-white p-5">
+          <div className="flex items-center gap-2 text-gray-900">
+            <TrendingUp className="h-4 w-4 text-blue-600" />
+            <h2 className="text-lg font-semibold">最近两次运行对比</h2>
+          </div>
+          <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+            <HistoryMetric
+              label="分析证据"
+              current={runCompare.current.source_count}
+              delta={runCompare.delta?.source_count_delta}
+            />
+            <HistoryMetric
+              label="结论数"
+              current={runCompare.current.claim_count}
+              delta={runCompare.delta?.claim_count_delta}
+            />
+            <HistoryMetric
+              label="证据覆盖率"
+              current={`${(runCompare.current.evidence_coverage_rate * 100).toFixed(1)}%`}
+              delta={runCompare.delta ? `${formatSignedPercent(runCompare.delta.evidence_coverage_delta)}` : undefined}
+            />
+            <HistoryMetric
+              label="重试次数"
+              current={runCompare.current.retry_count}
+              delta={runCompare.delta?.retry_count_delta}
+              invertDelta
+            />
+            <HistoryMetric
+              label="人工修正"
+              current={runCompare.current.manual_correction_count}
+              delta={runCompare.delta?.manual_correction_delta}
+              invertDelta
+            />
+          </div>
+          {runCompare.previous ? (
+            <div className="mt-4 space-y-1 text-sm text-gray-500">
+              <p>当前对比的是第 {runCompare.current.run_index} 次运行和第 {runCompare.previous.run_index} 次运行。</p>
+              <p>这里的“分析证据”指最终被纳入分析的来源，不含被筛除的候选来源。</p>
+            </div>
+          ) : (
+            <div className="mt-4 space-y-1 text-sm text-gray-500">
+              <p>当前只有一次运行记录，后续重跑后这里会展示改进幅度。</p>
+              <p>这里的“分析证据”指最终被纳入分析的来源，不含被筛除的候选来源。</p>
+            </div>
+          )}
+        </section>
+      )}
+
+      {!polling && (
+        <section className="grid gap-4 lg:grid-cols-2">
+          <div className="rounded-2xl border border-gray-200 bg-white p-5">
+            <div className="flex items-center gap-2 text-gray-900">
+              {qaPassed ? (
+                <ShieldCheck className="h-4 w-4 text-green-600" />
+              ) : (
+                <AlertTriangle className="h-4 w-4 text-amber-600" />
+              )}
+              <h2 className="text-lg font-semibold">最近一次质检</h2>
+            </div>
+            {!task.last_qa_feedback || Object.keys(task.last_qa_feedback).length === 0 ? (
+              <p className="mt-4 text-sm text-gray-500">任务尚未产出 QA 结果。</p>
+            ) : (
+              <div className="mt-4 space-y-3">
+                <div className={`inline-flex rounded-full px-3 py-1 text-sm font-medium ${
+                  qaPassed ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"
+                }`}>
+                  {qaPassed ? "QA 通过" : "QA 打回 / 待处理"}
+                </div>
+                {qaIssues.length > 0 ? (
+                  <div className="space-y-2">
+                    {qaIssues.slice(0, 4).map((issue, index) => (
+                      <div key={`${issue.field_path ?? "issue"}-${index}`} className="rounded-xl bg-gray-50 p-3 text-sm text-gray-700">
+                        <div className="font-medium text-gray-900">
+                          {String(issue.issue_type ?? "issue")}
+                          {issue.field_path ? ` · ${String(issue.field_path)}` : ""}
+                        </div>
+                        <div className="mt-1 text-gray-600">{String(issue.description ?? "")}</div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-gray-500">本次 QA 没有记录结构化问题列表。</p>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-2xl border border-gray-200 bg-white p-5">
+            <div className="flex items-center gap-2 text-gray-900">
+              <RefreshCw className="h-4 w-4 text-blue-600" />
+              <h2 className="text-lg font-semibold">返工指令与约束</h2>
+            </div>
+            {Object.keys(handoff).length > 0 ? (
+              <div className="mt-4 rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900">
+                <div>目标 Agent：{String(handoff.target_agent ?? "-")}</div>
+                <div className="mt-1">问题类型：{String(handoff.issue_type ?? "-")}</div>
+                {Array.isArray(handoff.failed_fields) && (handoff.failed_fields as unknown[]).length > 0 ? (
+                  <div className="mt-1">
+                    失败字段：{(handoff.failed_fields as unknown[]).map(String).join("、")}
+                  </div>
+                ) : null}
+                {handoff.evidence_requirements ? (
+                  <div className="mt-1">证据要求：{String(handoff.evidence_requirements)}</div>
+                ) : null}
+              </div>
+            ) : (
+              <p className="mt-4 text-sm text-gray-500">当前没有待执行的结构化返工指令。</p>
+            )}
+
+            <div className="mt-4 space-y-2">
+              {constraints.length > 0 ? (
+                constraints.slice(0, 6).map((constraint) => (
+                  <div key={constraint.id} className="rounded-xl bg-gray-50 p-3 text-sm text-gray-700">
+                    <div className="font-medium text-gray-900">
+                      {constraint.applied_to || "unknown"} · {constraint.constraint_type}
+                    </div>
+                    <div className="mt-1">{constraint.constraint_value}</div>
+                  </div>
+                ))
+              ) : (
+                <p className="text-sm text-gray-500">暂时还没有积累下来的约束规则。</p>
+              )}
+            </div>
+          </div>
+        </section>
+      )}
+
+      {!polling && runs.length > 0 && (
+        <section className="rounded-2xl border border-gray-200 bg-white p-5">
+          <div className="flex items-center gap-2 text-gray-900">
+            <Activity className="h-4 w-4 text-blue-600" />
+            <h2 className="text-lg font-semibold">运行历史</h2>
+          </div>
+          <div className="mt-4 space-y-3">
+            {runs.map((run) => (
+              <div key={run.id} className="rounded-xl bg-gray-50 p-4">
+                <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded-full bg-white px-3 py-1 text-sm font-medium text-gray-700">
+                      第 {run.run_index} 次运行
+                    </span>
+                    <span className={`rounded-full px-3 py-1 text-xs font-medium ${STATUS_COLORS[run.status] ?? "bg-gray-100 text-gray-700"}`}>
+                      {run.status}
+                    </span>
+                    <span className="text-sm text-gray-500">
+                      {new Date(run.created_at).toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="text-sm text-gray-500">
+                    证据 {run.source_count} · 结论 {run.claim_count} · 覆盖率 {(run.evidence_coverage_rate * 100).toFixed(1)}%
+                  </div>
+                </div>
+                {hasCurationSummary(run.curation_summary) ? (
+                  <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                    <span className="rounded-full bg-white px-3 py-1 text-gray-600">
+                      筛选 {run.curation_summary.kept_count ?? run.source_count}/{run.curation_summary.input_count ?? run.source_count}
+                    </span>
+                    {(run.curation_summary.removed_count ?? 0) > 0 ? (
+                      <span className="rounded-full bg-amber-50 px-3 py-1 text-amber-700">
+                        筛除 {run.curation_summary.removed_count} 条
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            ))}
           </div>
         </section>
       )}
@@ -291,7 +666,9 @@ export default function TaskDetail() {
           {/* DAG Progress */}
           {id && (
             <div className="rounded-lg border bg-gray-50 p-2">
-              <DagView taskId={id} height="220px" />
+              <Suspense fallback={<SectionLoading label="正在加载执行链路图..." />}>
+                <LazyDagView taskId={id} height="220px" />
+              </Suspense>
             </div>
           )}
           
@@ -352,6 +729,46 @@ function MetricCard({ label, value }: { label: string; value: string | number })
     <div className="bg-white border border-gray-200 rounded-xl p-4 text-center">
       <div className="text-2xl font-bold text-gray-900">{value}</div>
       <div className="text-xs text-gray-500 mt-1">{label}</div>
+    </div>
+  );
+}
+
+function formatSignedPercent(value: number) {
+  const prefix = value > 0 ? "+" : "";
+  return `${prefix}${(value * 100).toFixed(1)}%`;
+}
+
+function HistoryMetric({
+  label,
+  current,
+  delta,
+  invertDelta = false,
+}: {
+  label: string;
+  current: string | number;
+  delta?: string | number;
+  invertDelta?: boolean;
+}) {
+  const numericDelta = typeof delta === "number" ? delta : undefined;
+  const resolvedDelta = numericDelta ?? 0;
+  const deltaClass = delta === undefined
+    ? "text-gray-400"
+    : typeof delta === "string"
+      ? "text-blue-600"
+      : resolvedDelta === 0
+        ? "text-gray-500"
+        : ((resolvedDelta > 0) !== invertDelta ? "text-green-600" : "text-red-600");
+  const deltaText = delta === undefined
+    ? "—"
+    : typeof delta === "string"
+      ? delta
+      : `${resolvedDelta > 0 ? "+" : ""}${resolvedDelta}`;
+
+  return (
+    <div className="rounded-xl bg-gray-50 p-4">
+      <div className="text-xs text-gray-500">{label}</div>
+      <div className="mt-1 text-2xl font-semibold text-gray-900">{current}</div>
+      <div className={`mt-2 text-sm font-medium ${deltaClass}`}>较上次 {deltaText}</div>
     </div>
   );
 }

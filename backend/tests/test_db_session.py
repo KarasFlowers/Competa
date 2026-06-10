@@ -31,6 +31,15 @@ async def test_migrate_add_columns_repairs_legacy_sqlite_schema(tmp_path):
                 fetched_at DATETIME
             )
         """))
+        await conn.execute(text("""
+            CREATE TABLE run_history (
+                id VARCHAR(32) PRIMARY KEY,
+                task_id VARCHAR(32),
+                run_index INTEGER DEFAULT 1,
+                status VARCHAR(32) DEFAULT 'completed',
+                created_at DATETIME
+            )
+        """))
 
         await _migrate_add_columns(conn)
 
@@ -42,8 +51,22 @@ async def test_migrate_add_columns_repairs_legacy_sqlite_schema(tmp_path):
             row[1]
             for row in (await conn.execute(text("PRAGMA table_info(sources)"))).fetchall()
         }
+        run_history_columns = {
+            row[1]
+            for row in (await conn.execute(text("PRAGMA table_info(run_history)"))).fetchall()
+        }
 
     await engine.dispose()
 
     assert "our_product_notes" in task_columns
+    assert "focus_areas" in task_columns
+    assert "manual_correction_count" in task_columns
+    assert "last_qa_feedback" in task_columns
+    assert "last_handoff" in task_columns
+    assert "last_curation_summary" in task_columns
     assert "reliability_score" in source_columns
+    assert "included_in_analysis" in source_columns
+    assert "curation_reason" in source_columns
+    assert "curation_tags" in source_columns
+    assert "curated_excerpt" in source_columns
+    assert "curation_summary" in run_history_columns

@@ -1,8 +1,17 @@
-import { useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { traceApi, Trace } from "../api/client";
 import { ArrowLeft, Clock, Activity, SearchCode, ChevronDown, ChevronRight } from "lucide-react";
-import DagView from "../components/DagView";
+
+const LazyDagView = lazy(() => import("../components/DagView"));
+
+function SectionLoading({ label }: { label: string }) {
+  return (
+    <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 px-4 py-8 text-center text-sm text-gray-500">
+      {label}
+    </div>
+  );
+}
 
 export default function TraceView() {
   const { id } = useParams<{ id: string }>();
@@ -83,14 +92,18 @@ export default function TraceView() {
       {/* DAG Visualization */}
       <div className="bg-white rounded-xl shadow-sm border p-6">
         <h3 className="text-sm font-semibold text-gray-900 mb-4">执行链路图 (DAG)</h3>
-        {id && <DagView taskId={id} height="280px" onNodeClick={(nodeId) => {
-          // Scroll to and expand the first event for this agent in the timeline
-          const eventIdx = trace?.events.findIndex((e) => e.agent_name === nodeId);
-          if (eventIdx !== undefined && eventIdx >= 0) {
-            const eventId = trace.events[eventIdx].id || `event-${eventIdx}`;
-            setExpandedEvents((prev) => new Set(prev).add(eventId));
-          }
-        }} />}
+        {id && (
+          <Suspense fallback={<SectionLoading label="正在加载执行链路图..." />}>
+            <LazyDagView taskId={id} height="280px" onNodeClick={(nodeId) => {
+              // Scroll to and expand the first event for this agent in the timeline
+              const eventIdx = trace?.events.findIndex((e) => e.agent_name === nodeId);
+              if (eventIdx !== undefined && eventIdx >= 0) {
+                const eventId = trace.events[eventIdx].id || `event-${eventIdx}`;
+                setExpandedEvents((prev) => new Set(prev).add(eventId));
+              }
+            }} />
+          </Suspense>
+        )}
       </div>
 
       {/* Timeline */}
