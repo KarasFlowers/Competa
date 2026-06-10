@@ -60,6 +60,7 @@ async def test_migrate_add_columns_repairs_legacy_sqlite_schema(tmp_path):
 
     assert "our_product_notes" in task_columns
     assert "focus_areas" in task_columns
+    assert "target_website" in task_columns
     assert "manual_correction_count" in task_columns
     assert "last_qa_feedback" in task_columns
     assert "last_handoff" in task_columns

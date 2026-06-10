@@ -1,5 +1,6 @@
 import { Suspense, lazy, type ReactNode } from "react";
 import { Routes, Route } from "react-router-dom";
+import AppBootGate from "./components/AppBootGate";
 import Layout from "./components/Layout";
 
 const Landing = lazy(() => import("./pages/Landing"));
@@ -28,19 +29,21 @@ function withSuspense(element: ReactNode) {
 
 function App() {
   return (
-    <Routes>
-      <Route element={<Layout />}>
-        <Route path="/" element={withSuspense(<Landing />)} />
-        <Route path="/demos/:scenarioId" element={withSuspense(<DemoView />)} />
-        <Route path="/tasks" element={withSuspense(<TasksWorkspace />)} />
-        <Route path="/tasks/new" element={withSuspense(<TaskCreate />)} />
-        <Route path="/tasks/:id" element={withSuspense(<TaskDetail />)} />
-        <Route path="/tasks/:id/report" element={withSuspense(<ReportView />)} />
-        <Route path="/tasks/:id/traces" element={withSuspense(<TraceView />)} />
-        <Route path="/tasks/:id/survey" element={withSuspense(<SurveyView />)} />
-        <Route path="/tasks/:id/interview" element={withSuspense(<InterviewView />)} />
-      </Route>
-    </Routes>
+    <AppBootGate>
+      <Routes>
+        <Route element={<Layout />}>
+          <Route path="/" element={withSuspense(<Landing />)} />
+          <Route path="/demos/:scenarioId" element={withSuspense(<DemoView />)} />
+          <Route path="/tasks" element={withSuspense(<TasksWorkspace />)} />
+          <Route path="/tasks/new" element={withSuspense(<TaskCreate />)} />
+          <Route path="/tasks/:id" element={withSuspense(<TaskDetail />)} />
+          <Route path="/tasks/:id/report" element={withSuspense(<ReportView />)} />
+          <Route path="/tasks/:id/traces" element={withSuspense(<TraceView />)} />
+          <Route path="/tasks/:id/survey" element={withSuspense(<SurveyView />)} />
+          <Route path="/tasks/:id/interview" element={withSuspense(<InterviewView />)} />
+        </Route>
+      </Routes>
+    </AppBootGate>
   );
 }
 

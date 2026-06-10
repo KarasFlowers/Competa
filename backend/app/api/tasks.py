@@ -92,6 +92,7 @@ class CompetitorInput(BaseModel):
 class TaskCreate(BaseModel):
     industry: str = ""
     target_product: str
+    target_website: str = ""
     competitors: list[str | CompetitorInput] = Field(default_factory=list)
     focus_areas: list[str] = Field(default_factory=list)
     our_product_notes: str = ""  # context about our own product
@@ -101,6 +102,7 @@ class TaskResponse(BaseModel):
     id: str
     industry: str
     target_product: str
+    target_website: str = ""
     competitors: list[str | CompetitorInput]
     focus_areas: list[str] = Field(default_factory=list)
     our_product_notes: str = ""
@@ -134,6 +136,7 @@ class TaskOverviewItem(BaseModel):
     id: str
     industry: str
     target_product: str
+    target_website: str = ""
     competitors: list[str | CompetitorInput]
     focus_areas: list[str] = Field(default_factory=list)
     our_product_notes: str = ""
@@ -199,6 +202,7 @@ async def create_task(body: TaskCreate, session: AsyncSession = Depends(get_sess
     task = TaskModel(
         industry=body.industry,
         target_product=body.target_product,
+        target_website=body.target_website,
         competitors=competitors_data,
         focus_areas=_normalize_focus_areas(body.focus_areas),
         our_product_notes=body.our_product_notes,
@@ -252,6 +256,7 @@ async def get_tasks_overview(session: AsyncSession = Depends(get_session)):
                 id=task.id,
                 industry=task.industry,
                 target_product=task.target_product,
+                target_website=task.target_website or "",
                 competitors=task.competitors or [],
                 focus_areas=task.focus_areas or [],
                 our_product_notes=task.our_product_notes or "",

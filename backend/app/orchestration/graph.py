@@ -61,6 +61,7 @@ async def collect_node(state: PipelineState) -> dict:
 
     result = await _collector.run({
         "target_product": task.get("target_product", ""),
+        "target_website": task.get("target_website", ""),
         "competitors": task.get("competitors", []),
         "industry": task.get("industry", ""),
         "our_product_notes": task.get("our_product_notes", ""),
@@ -95,6 +96,7 @@ async def survey_node(state: PipelineState) -> dict:
         "competitors": task.get("competitors", []),
         "industry": task.get("industry", ""),
         "focus_areas": task.get("focus_areas"),
+        "our_product_notes": task.get("our_product_notes", ""),
     })
 
     llm_info = result.get("_llm_response", {})
@@ -127,6 +129,7 @@ async def interview_node(state: PipelineState) -> dict:
         "competitors": task.get("competitors", []),
         "industry": task.get("industry", ""),
         "survey_questions": survey_questions if survey_questions else None,
+        "our_product_notes": task.get("our_product_notes", ""),
     })
 
     llm_info = result.get("_llm_response", {})
@@ -161,6 +164,7 @@ async def fieldwork_node(state: PipelineState) -> dict:
         "survey": state.get("survey", {}),
         "interview": state.get("interview", {}),
         "personas": state.get("analysis", {}).get("personas", []),
+        "our_product_notes": task.get("our_product_notes", ""),
     })
 
     new_sources = result.get("sources", [])

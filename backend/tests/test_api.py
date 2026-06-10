@@ -37,6 +37,7 @@ class TestTasks:
             json={
                 "industry": "SaaS",
                 "target_product": "ProductA",
+                "target_website": "https://producta.example.com",
                 "competitors": ["ProductB", "ProductC"],
                 "focus_areas": ["pricing", "persona", "pricing"],
             },
@@ -44,24 +45,29 @@ class TestTasks:
         assert resp.status_code == 201
         data = resp.json()
         assert data["target_product"] == "ProductA"
+        assert data["target_website"] == "https://producta.example.com"
         assert data["focus_areas"] == ["pricing", "persona"]
         task_id = data["id"]
 
         resp = await client.get("/api/tasks")
         assert resp.status_code == 200
+        created_task = next((task for task in resp.json() if task["id"] == task_id), None)
         ids = [t["id"] for t in resp.json()]
         assert task_id in ids
+        assert created_task is not None
+        assert created_task["target_website"] == "https://producta.example.com"
 
     async def test_get_task(self, client: AsyncClient):
         resp = await client.post(
             "/api/tasks",
-            json={"target_product": "X"},
+            json={"target_product": "X", "target_website": "https://x.example.com"},
         )
         task_id = resp.json()["id"]
 
         resp = await client.get(f"/api/tasks/{task_id}")
         assert resp.status_code == 200
         assert resp.json()["id"] == task_id
+        assert resp.json()["target_website"] == "https://x.example.com"
 
     async def test_get_task_includes_last_curation_summary(self, client: AsyncClient):
         resp = await client.post(
@@ -94,6 +100,7 @@ class TestTasks:
             json={
                 "industry": "AI",
                 "target_product": "WorkspaceA",
+                "target_website": "https://workspacea.example.com",
                 "competitors": ["Alpha", "Beta"],
                 "focus_areas": ["pricing", "swot"],
                 "our_product_notes": "Internal differentiation notes",
@@ -143,6 +150,7 @@ class TestTasks:
         assert data["stats"]["avg_evidence_coverage"] == 0.88
 
         item = next(t for t in data["items"] if t["id"] == task_id)
+        assert item["target_website"] == "https://workspacea.example.com"
         assert item["our_product_notes"] == "Internal differentiation notes"
         assert item["focus_areas"] == ["pricing", "swot"]
         assert item["last_curation_summary"]["kept_count"] == 6

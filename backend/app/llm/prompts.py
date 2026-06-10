@@ -71,6 +71,7 @@ def _format_competitors(competitors: list[str] | list[dict]) -> str:
 
 def build_collector_prompt(
     target_product: str,
+    target_website: str,
     competitors: list[str] | list[dict],
     industry: str,
     focus_areas: list[str] | None = None,
@@ -94,6 +95,8 @@ def build_collector_prompt(
         f"- Industry: {industry or 'general'}\n"
         f"- Focus areas: {focus}\n"
     )
+    if target_website:
+        base += f"- Target official website: {target_website}\n"
     if our_product_notes:
         base += f"- Our product context: {our_product_notes}\n"
     base += "\n"
@@ -365,16 +368,20 @@ def build_survey_prompt(
     competitors: list[str],
     industry: str = "",
     focus_areas: list[str] | None = None,
+    our_product_notes: str = "",
 ) -> str:
     competitors_str = ", ".join(competitors)
     focus_str = ", ".join(focus_areas) if focus_areas else "features, pricing, UX, support"
-    return (
+    prompt = (
         f"Design a competitive analysis survey questionnaire for '{target_product}' "
         f"vs competitors [{competitors_str}] in the {industry or 'technology'} industry.\n\n"
         f"Focus areas: {focus_str}\n\n"
         f"The survey should help understand user preferences, pain points, and "
         f"switching behavior between these products."
     )
+    if our_product_notes:
+        prompt += f"\n\nRequester context:\n{our_product_notes}"
+    return prompt
 
 
 # ---------------------------------------------------------------------------
@@ -424,6 +431,7 @@ def build_interview_prompt(
     competitors: list[str],
     industry: str = "",
     survey_questions: list[dict] | None = None,
+    our_product_notes: str = "",
 ) -> str:
     competitors_str = ", ".join(competitors)
     survey_context = ""
@@ -438,13 +446,16 @@ def build_interview_prompt(
             "going deeper into the areas the survey covers at a surface level:\n"
             + q_summary
         )
-    return (
+    prompt = (
         f"Design a semi-structured interview guide for competitive analysis of "
         f"'{target_product}' vs competitors [{competitors_str}] "
         f"in the {industry or 'technology'} industry.{survey_context}\n\n"
         f"The interview should uncover deep insights about user decision-making, "
         f"pain points, and competitive switching behavior."
     )
+    if our_product_notes:
+        prompt += f"\n\nRequester context:\n{our_product_notes}"
+    return prompt
 
 
 # ---------------------------------------------------------------------------
@@ -503,6 +514,7 @@ def build_fieldwork_prompt(
     survey: dict | None = None,
     interview: dict | None = None,
     personas: list[dict] | None = None,
+    our_product_notes: str = "",
 ) -> str:
     competitors_str = ", ".join(competitors)
     parts: list[str] = [
@@ -532,6 +544,9 @@ def build_fieldwork_prompt(
             for q in interview["questions"][:12]
         )
         parts.append(f"\nInterview questions to gather excerpts for:\n{iq}\n")
+
+    if our_product_notes:
+        parts.append(f"\nRequester context:\n{our_product_notes}\n")
 
     parts.append(
         "\nProduce simulated survey results and interview excerpts that a competitive "

@@ -29,6 +29,7 @@ async def _migrate_add_columns(conn) -> None:
     migrations = [
         ("tasks", "our_product_notes", "TEXT DEFAULT ''"),
         ("tasks", "focus_areas", "JSON DEFAULT '[]'"),
+        ("tasks", "target_website", "TEXT DEFAULT ''"),
         ("tasks", "manual_correction_count", "INTEGER DEFAULT 0"),
         ("tasks", "last_qa_feedback", "JSON DEFAULT '{}'"),
         ("tasks", "last_handoff", "JSON DEFAULT '{}'"),

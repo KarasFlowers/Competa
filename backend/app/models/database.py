@@ -19,6 +19,7 @@ class TaskModel(Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_gen_id)
     industry: Mapped[str] = mapped_column(String(255), default="")
     target_product: Mapped[str] = mapped_column(String(255), default="")
+    target_website: Mapped[str] = mapped_column(Text, default="")
     competitors: Mapped[dict] = mapped_column(JSON, default=list)
     focus_areas: Mapped[list] = mapped_column(JSON, default=list)
     our_product_notes: Mapped[str] = mapped_column(Text, default="")

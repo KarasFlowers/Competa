@@ -26,6 +26,7 @@ export interface Task {
   id: string;
   industry: string;
   target_product: string;
+  target_website: string;
   competitors: (string | CompetitorInput)[];
   focus_areas: string[];
   our_product_notes: string;
@@ -76,6 +77,7 @@ export interface TaskOverviewResponse {
 export interface TaskCreatePayload {
   industry?: string;
   target_product: string;
+  target_website?: string;
   competitors?: (string | CompetitorInput)[];
   focus_areas?: string[];
   our_product_notes?: string;

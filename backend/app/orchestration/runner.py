@@ -113,6 +113,7 @@ async def run_pipeline(task_id: str) -> None:
                 "task_id": task_id,
                 "task": {
                     "target_product": task.target_product,
+                    "target_website": task.target_website or "",
                     "competitors": task.competitors or [],
                     "industry": task.industry or "",
                     "focus_areas": task.focus_areas or [],

@@ -4,6 +4,7 @@ import {
   Activity,
   ArrowRight,
   ClipboardList,
+  ExternalLink,
   FileSearch,
   FileText,
   FolderKanban,
@@ -82,6 +83,24 @@ function formatCoverage(value: number | null | undefined) {
 
 function formatTime(value: string) {
   return new Date(value).toLocaleString();
+}
+
+function formatWebsiteLabel(url: string) {
+  return url.replace(/^https?:\/\//i, "").replace(/\/$/, "");
+}
+
+function formatBriefPreview(value: string | null | undefined) {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  const normalized = trimmed.replace(/\n{3,}/g, "\n\n");
+  if (normalized.length <= 220) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, 220).trimEnd()}...`;
 }
 
 function TaskMetricsStrip({ task }: { task: TaskOverviewItem }) {
@@ -172,7 +191,7 @@ function ArtifactLinks({ task }: { task: TaskOverviewItem }) {
 function TaskCard({ task }: { task: TaskOverviewItem }) {
   const statusMeta = getStatusMeta(task.status);
   const competitorNames = task.competitors.map(getCompetitorName).filter(Boolean);
-  const notePreview = task.our_product_notes?.trim();
+  const notePreview = formatBriefPreview(task.our_product_notes);
   const focusAreas = task.focus_areas?.filter(Boolean) ?? [];
   const qaPassed = task.last_qa_feedback?.passed === true;
   const hasQaResult = task.last_qa_feedback && Object.keys(task.last_qa_feedback).length > 0;
@@ -197,6 +216,18 @@ function TaskCard({ task }: { task: TaskOverviewItem }) {
           <div className="text-sm text-gray-500">
             {task.industry || "未填写行业"} · {competitorNames.length} 个竞品 · 最近更新 {formatTime(task.updated_at)}
           </div>
+          {task.target_website ? (
+            <a
+              href={task.target_website}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={task.target_website}
+              className="inline-flex max-w-full items-center gap-2 rounded-full border border-cyan-100 bg-cyan-50 px-3 py-1 text-xs font-medium text-cyan-700 transition-colors hover:border-cyan-200 hover:bg-cyan-100"
+            >
+              <ExternalLink className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">目标官网：{formatWebsiteLabel(task.target_website)}</span>
+            </a>
+          ) : null}
         </div>
 
         <Link
@@ -231,8 +262,8 @@ function TaskCard({ task }: { task: TaskOverviewItem }) {
       </div>
 
       {notePreview ? (
-        <div className="mt-5 rounded-2xl border border-blue-100 bg-blue-50/70 px-4 py-3 text-sm leading-6 text-gray-700">
-          <span className="font-medium text-blue-900">我方产品备注：</span>
+        <div className="mt-5 whitespace-pre-line rounded-2xl border border-blue-100 bg-blue-50/70 px-4 py-3 text-sm leading-6 text-gray-700">
+          <span className="font-medium text-blue-900">研究 brief：</span>
           {notePreview}
         </div>
       ) : null}
@@ -337,6 +368,7 @@ export default function TasksWorkspace() {
 
     const searchableText = [
       task.target_product,
+      task.target_website,
       task.industry,
       task.our_product_notes,
       ...task.competitors.map(getCompetitorName),
@@ -456,7 +488,7 @@ export default function TasksWorkspace() {
               type="search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="搜索任务名、行业、竞品或我方备注"
+              placeholder="搜索任务名、官网、行业、竞品或研究 brief"
               className="w-full rounded-2xl border border-gray-200 bg-gray-50 py-3 pl-11 pr-4 text-sm text-gray-900 outline-none transition-colors placeholder:text-gray-400 focus:border-blue-300 focus:bg-white"
             />
           </div>

@@ -18,6 +18,7 @@ import {
   Activity,
   AlertTriangle,
   ClipboardList,
+  ExternalLink,
   Layers3,
   MessageSquareText,
   Plus,
@@ -61,6 +62,23 @@ const STATUS_COLORS: Record<string, string> = {
   failed: "bg-red-100 text-red-700",
 };
 
+const STATUS_LABELS: Record<string, string> = {
+  pending: "待启动",
+  collecting: "采集中",
+  surveying: "问卷设计中",
+  interviewing: "访谈设计中",
+  fieldwork: "调研执行中",
+  curating: "证据筛选中",
+  analyzing: "分析中",
+  writing: "写作中",
+  screenshotting: "截图处理中",
+  filtering: "过滤中",
+  qa: "质检中",
+  retrying: "返工中",
+  completed: "已完成",
+  failed: "失败",
+};
+
 const CURATION_REASON_LABELS: Record<string, string> = {
   selected: "已纳入分析",
   duplicate_url: "重复 URL",
@@ -83,6 +101,14 @@ function formatReliability(value: number | undefined) {
     return "--";
   }
   return `${(value * 100).toFixed(0)}%`;
+}
+
+function getStatusLabel(status: string) {
+  return STATUS_LABELS[status] ?? status;
+}
+
+function formatWebsiteLabel(url: string) {
+  return url.replace(/^https?:\/\//i, "").replace(/\/$/, "");
 }
 
 function SectionLoading({ label }: { label: string }) {
@@ -270,7 +296,7 @@ export default function TaskDetail() {
   };
 
   if (error) return <div className="p-8 text-red-600">{error}</div>;
-  if (!task) return <div className="p-8 text-gray-500">Loading...</div>;
+  if (!task) return <div className="p-8 text-gray-500">加载中...</div>;
 
   const statusClass = STATUS_COLORS[task.status] || "bg-gray-100 text-gray-700";
   const qaPassed = task.last_qa_feedback?.passed === true;
@@ -291,11 +317,23 @@ export default function TaskDetail() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">{task.target_product}</h1>
           <p className="text-sm text-gray-500 mt-1">
-            {task.industry || "No industry"} &middot; {task.competitors.length} competitors
+            {task.industry || "未填写行业"} &middot; {task.competitors.length} 个竞品
           </p>
+          {task.target_website ? (
+            <a
+              href={task.target_website}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-3 inline-flex items-center gap-2 rounded-full border border-cyan-100 bg-cyan-50 px-3 py-1.5 text-sm font-medium text-cyan-700 transition-colors hover:border-cyan-200 hover:bg-cyan-100"
+              title={task.target_website}
+            >
+              <ExternalLink className="h-4 w-4" />
+              目标官网：{formatWebsiteLabel(task.target_website)}
+            </a>
+          ) : null}
         </div>
         <span className={`px-3 py-1 rounded-full text-sm font-medium ${statusClass}`}>
-          {task.status}
+          {getStatusLabel(task.status)}
         </span>
       </div>
 
@@ -306,7 +344,7 @@ export default function TaskDetail() {
             onClick={handleRun}
             className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
           >
-            Run Pipeline
+            启动分析
           </button>
         )}
         {task.status === "completed" && (
@@ -359,7 +397,7 @@ export default function TaskDetail() {
 
       {/* Competitors */}
       <section>
-        <h2 className="text-lg font-semibold text-gray-800 mb-2">Competitors</h2>
+        <h2 className="text-lg font-semibold text-gray-800 mb-2">竞品范围</h2>
         <div className="flex flex-wrap gap-2">
           {task.competitors.map((c, i) => {
             const name = typeof c === "string" ? c : c.name;
@@ -378,7 +416,7 @@ export default function TaskDetail() {
             );
           })}
           {task.competitors.length === 0 && (
-            <span className="text-sm text-gray-400">None specified</span>
+            <span className="text-sm text-gray-400">暂未指定竞品</span>
           )}
         </div>
       </section>
@@ -406,10 +444,10 @@ export default function TaskDetail() {
           <div className="rounded-2xl border border-gray-200 bg-white p-5">
             <div className="flex items-center gap-2 text-gray-900">
               <Sparkles className="h-4 w-4 text-blue-600" />
-              <h2 className="text-lg font-semibold">我方产品上下文</h2>
+              <h2 className="text-lg font-semibold">研究背景 / 分析 brief</h2>
             </div>
-            <p className="mt-4 text-sm leading-6 text-gray-600">
-              {task.our_product_notes?.trim() || "当前没有补充我方产品说明。"}
+            <p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-gray-600">
+              {task.our_product_notes?.trim() || "当前没有补充研究背景或分析 brief。"}
             </p>
           </div>
         </section>
@@ -627,7 +665,7 @@ export default function TaskDetail() {
                       第 {run.run_index} 次运行
                     </span>
                     <span className={`rounded-full px-3 py-1 text-xs font-medium ${STATUS_COLORS[run.status] ?? "bg-gray-100 text-gray-700"}`}>
-                      {run.status}
+                      {getStatusLabel(run.status)}
                     </span>
                     <span className="text-sm text-gray-500">
                       {new Date(run.created_at).toLocaleString()}
