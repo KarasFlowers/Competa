@@ -1,157 +1,224 @@
-# Competa — AI 竞品分析 Agent 协作系统
+# Competa
 
-多 Agent 协作的数字调研小组：从信息采集到结构化报告，全链路自动化，每条结论可溯源。
+Competa 是一个面向竞品分析场景的多 Agent 协作系统。它把“信息采集、调研设计、调研执行、证据筛选、结构化分析、报告撰写、QA 返工”串成一条可追踪的流水线，让输出不只是像报告，更像一套可复盘的研究过程。
 
-## 系统架构
+## 这个项目解决什么问题
 
+传统 AI 竞品分析很容易停在两种不够用的状态：
+
+- 只会抓资料，但结论和证据脱节
+- 能生成报告，但过程不可追踪、失败后要从头再来
+
+Competa 想解决的是更接近真实工作流的问题：
+
+- 让一手调研环节真正进入分析链路，而不是只做网页摘要
+- 让每条关键结论都能回溯到来源
+- 让 QA 失败后的返工有方向，而不是整条链路盲目重跑
+- 让运行质量、人工修正和多轮改进都能被记录下来
+
+## 核心能力
+
+- `10 节点 DAG`：`Collector -> Survey -> Interview -> Fieldwork -> Curator -> Analyst -> Writer -> Screenshot -> Filter -> QA`
+- `断点续跑`：基于 LangGraph SQLite checkpoint，失败后可以从中断点恢复，而不是整条链路重来
+- `调研闭环`：问卷、访谈提纲、fieldwork 结果会回流为后续分析证据
+- `证据筛选层`：来源去重、低质量剔除、单域名限额、保留/剔除原因持久化
+- `Evidence 强约束`：无引用 Claim 会在 Filter 节点被过滤掉
+- `QA + 棘轮约束`：失败模式会沉淀成约束，后续重跑时减少重复错误
+- `质量评分 Eval`：对每次运行计算质量分，拆解证据覆盖、结构完整度、引用密度、来源质量
+- `人工确认门`：分析完成后可暂停，用户补充写作约束后再继续生成报告
+- `任务工作台`：集中查看任务状态、产物入口、运行历史、质量指标和人工修正情况
+- `启动保护`：前端会等待后端健康检查就绪，避免启动早期误报“无法连接”
+
+## 系统流程
+
+```text
+用户输入
+  -> Collector
+  -> Survey
+  -> Interview
+  -> Fieldwork
+  -> Curator
+  -> Analyst
+  -> Writer
+  -> Screenshot
+  -> Filter
+  -> QA
+
+QA 失败:
+  -> 定向打回 Collector / Analyst / Writer
+
+人工确认模式:
+  -> Analyst 完成后暂停
+  -> 用户补充约束
+  -> 从 Writer 继续
 ```
-用户输入 → Collector → Survey → Interview → Fieldwork → Curator → Analyst → Writer → Screenshot → Filter → QA
-                                                                                                          │
-                ┌──────────────────────────────────────── QA 打回（最多 2 轮）──────────────────────────────┘
-                └────────────────────────────── rerun 保留来源与约束，重新生成报告 ──────────────────────────┘
-```
-
-- **Collector**：多源信息采集（URL / 文档 / 访谈 / 问卷）
-- **Survey / Interview / Fieldwork**：设计并回流调研证据，让一手研究真正进入分析链路
-- **Curator**：去重、限域、筛除低质量来源，形成可解释的证据筛选结果
-- **Analyst**：结构化分析（功能树 / 定价 / 用户画像 / SWOT）
-- **Writer**：报告撰写（含引用标注）
-- **Screenshot**：补充竞品网页截图证据
-- **Filter**：过滤无引用 Claim（强制 Evidence 绑定）
-- **QA**：质检 + 棘轮约束 + 结构化 Handoff 返工指令
 
 ## 技术栈
 
-| 层 | 技术 |
-|----|------|
-| 后端 | Python 3.11+ / FastAPI / SQLAlchemy / Pydantic v2 / LangGraph / OpenAI API |
-| 前端 | React 19 / TypeScript / Vite / TailwindCSS 4 / Lucide Icons |
-| 存储 | SQLite（MVP，可升级 PostgreSQL） |
-| 编排 | LangGraph StateGraph + 条件边 |
+| 层级 | 技术 |
+| --- | --- |
+| 后端 | Python 3.11+, FastAPI, SQLAlchemy, Pydantic v2, LangGraph |
+| 前端 | React 19, TypeScript, Vite, Tailwind CSS 4 |
+| 存储 | SQLite |
+| 模型接入 | OpenAI 兼容 API |
+| 搜索 | `ddgs` / `tavily` 可切换 |
 
-## 一键启动
+## 快速启动
 
 ### 前置条件
 
-- Python 3.11+
-- Node.js 18+
-- [uv](https://docs.astral.sh/uv/)（推荐）或 pip
+- Python `3.11+`
+- Node.js `18+`
+- `uv`（推荐，也可以用 `pip`）
 
-### 快速启动（Windows）
+### Windows 一键启动
 
 ```powershell
 .\start-dev.ps1
 ```
 
-自动安装依赖、启动后端（:8000）和前端（:5173），并打开浏览器。
+脚本会自动：
+
+- 检查并初始化 `backend/.venv`
+- 安装前端依赖
+- 启动后端 `http://127.0.0.1:8000`
+- 启动前端 `http://127.0.0.1:5173`
+- 自动打开浏览器
+
+如果前端比后端先起来，应用会先等待 `/api/health`，不会直接把短暂启动过程显示成连接失败。
 
 ### 手动启动
 
 ```bash
-# 后端
+# backend
 cd backend
-cp .env.example .env          # 填入 LLM_API_KEY
-uv sync                       # 或 pip install -e .
+# 首次运行前，将 .env.example 复制为 .env 并填写所需配置
+uv sync
 uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
-
-# 前端
-cd frontend
-npm install
-npm run dev
 ```
 
-访问 http://127.0.0.1:5173
+```bash
+# frontend
+cd frontend
+npm install
+npm run dev -- --host 127.0.0.1 --port 5173
+```
 
-### 环境变量
+启动后访问：
 
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `LLM_API_KEY` | OpenAI 兼容 API Key | （必填） |
-| `LLM_BASE_URL` | API Base URL | `https://api.openai.com/v1` |
-| `LLM_MODEL` | 模型名称 | `gpt-4o-mini` |
-| `DATABASE_URL` | 数据库连接串 | `sqlite+aiosqlite:///./competa.db` |
-| `DEBUG` | 调试模式 | `false` |
+- 前端：<http://127.0.0.1:5173>
+- 后端文档：<http://127.0.0.1:8000/docs>
 
-## API 概览
+## 环境变量
+
+可以参考 [backend/.env.example](backend/.env.example)。
+
+| 变量 | 说明 | 常见取值 |
+| --- | --- | --- |
+| `LLM_API_KEY` | 主 API Key | 必填，除非开启 mock |
+| `LLM_API_KEY_2` / `LLM_API_KEY_3` | 备用 Key | 可选 |
+| `LLM_BASE_URL` | OpenAI 兼容接口地址 | 如 `https://api.openai.com/v1` |
+| `LLM_MODEL` | 模型名 | 如 `gpt-4o-mini` |
+| `LLM_MOCK` | 是否启用 mock LLM | `true` / `false` |
+| `DATABASE_URL` | 数据库连接串 | 默认 SQLite |
+| `SEARCH_PROVIDER` | 搜索提供方 | `ddgs` / `tavily` / `none` |
+| `TAVILY_API_KEY` | Tavily Key | 使用 Tavily 时必填 |
+| `SEARCH_MAX_RESULTS` | 单次搜索最大结果数 | 如 `10` |
+| `SEARCH_FETCH_CONTENT` | 是否抓取页面正文 | `true` / `false` |
+| `RESPECT_ROBOTS_TXT` | 是否遵守 robots.txt | `true` / `false` |
+| `DEBUG` | 调试模式 | `true` / `false` |
+
+如果你只是想本地看交互和链路，可以把 `LLM_MOCK=true`，这对调 UI 和联调很方便。
+
+## 前端使用路径
+
+- `/`：项目首页
+- `/tasks`：任务工作台
+- `/tasks/new`：创建任务
+- `/tasks/:id`：任务详情、运行控制、人工确认入口
+- `/tasks/:id/report`：报告查看与引用回溯
+- `/tasks/:id/traces`：执行追踪与 DAG 状态
+- `/tasks/:id/survey`：问卷查看
+- `/tasks/:id/interview`：访谈提纲查看
+- `/demos/:scenarioId`：预置演示场景
+
+## 后端 API 概览
 
 | 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/health` | 健康检查 |
-| POST | `/api/tasks` | 创建分析任务 |
-| GET | `/api/tasks/overview` | 获取任务工作台总览与产物状态 |
-| GET | `/api/tasks` | 列出任务 |
-| GET | `/api/tasks/{id}` | 查询任务 |
-| POST | `/api/tasks/{id}/run` | 启动 Pipeline |
-| POST | `/api/tasks/{id}/rerun` | 保留来源与约束重新生成 |
-| GET | `/api/tasks/{id}/status` | 查询执行状态 |
-| GET | `/api/tasks/{id}/constraints` | 获取约束规则 |
-| GET | `/api/tasks/{id}/runs` | 获取运行历史 |
-| GET | `/api/tasks/{id}/runs/latest/compare` | 对比最近两次运行 |
-| GET | `/api/tasks/{id}/dag` | 获取 DAG 结构与节点状态 |
-| GET | `/api/tasks/{id}/report` | 获取报告 |
-| GET | `/api/tasks/{id}/export` | 导出 Markdown / Word |
-| GET | `/api/tasks/{id}/sources` | 获取来源列表 |
-| GET | `/api/tasks/{id}/sources/{sid}` | 获取单个来源详情 |
-| GET | `/api/tasks/{id}/metrics` | 获取质量指标 |
-| GET | `/api/tasks/{id}/traces` | 获取执行追踪 |
-| GET | `/api/tasks/{id}/analysis` | 获取结构化分析产物 |
-| GET | `/api/tasks/{id}/survey` | 获取问卷设计 |
-| GET | `/api/tasks/{id}/interview` | 获取访谈提纲 |
+| --- | --- | --- |
+| `GET` | `/api/health` | 健康检查 |
+| `POST` | `/api/tasks` | 创建任务 |
+| `GET` | `/api/tasks/overview` | 获取工作台总览 |
+| `POST` | `/api/tasks/{id}/run` | 启动任务 |
+| `POST` | `/api/tasks/{id}/rerun` | 保留来源与约束重跑 |
+| `POST` | `/api/tasks/{id}/continue` | 人工确认后继续执行 |
+| `GET` | `/api/tasks/{id}/constraints` | 获取约束列表 |
+| `GET` | `/api/tasks/{id}/runs` | 获取运行历史 |
+| `GET` | `/api/tasks/{id}/runs/latest/compare` | 对比最近两次运行 |
+| `GET` | `/api/tasks/{id}/dag` | 获取 DAG 结构与状态 |
+| `GET` | `/api/tasks/{id}/report` | 获取报告 |
+| `GET` | `/api/tasks/{id}/export` | 导出 Markdown / Word |
+| `GET` | `/api/tasks/{id}/sources` | 获取来源列表 |
+| `GET` | `/api/tasks/{id}/metrics` | 获取质量指标 |
+| `GET` | `/api/tasks/{id}/traces` | 获取执行追踪 |
+| `GET` | `/api/tasks/{id}/analysis` | 获取结构化分析产物 |
+| `GET` | `/api/tasks/{id}/survey` | 获取问卷 |
+| `GET` | `/api/tasks/{id}/interview` | 获取访谈提纲 |
 
-完整 API 文档：http://127.0.0.1:8000/docs
-
-## 前端页面
-
-| 路由 | 页面 |
-|------|------|
-| `/` | 首页（功能介绍） |
-| `/demos/:scenarioId` | 预置示例场景 |
-| `/tasks` | 任务工作台（筛选、追踪、快捷访问产物） |
-| `/tasks/new` | 创建分析任务 |
-| `/tasks/:id` | 任务详情 + 运行控制 + 证据筛选摘要 |
-| `/tasks/:id/report` | 报告查看 + 引用溯源 + 来源筛选解释 |
-| `/tasks/:id/traces` | 执行追踪与 DAG 回放 |
-| `/tasks/:id/survey` | 问卷查看 |
-| `/tasks/:id/interview` | 访谈提纲查看 |
-
-## 核心特性
-
-- **棘轮机制**：QA 失败模式自动转化为 ConstraintRule，后续 Agent 不会重复同类错误
-- **Evidence 强制绑定**：无引用 Claim 被 Filter 节点过滤，不进入最终报告
-- **证据筛选层**：来源会被去重、质量筛选、域名限额，并对保留/剔除原因做持久化
-- **结构化 Handoff**：QA 打回通过 HandoffInstruction 传递目标 Agent、问题类型、失败字段、证据要求
-- **改善记录**：重跑后 evidence_coverage delta 写入 Trace，可量化展示改进
-- **运行历史对比**：最近两次运行可直接比较分析证据数、覆盖率、重试次数与人工修正情况
-- **任务工作台**：集中查看任务状态、报告就绪情况、核心质量指标与调研产物入口
-- **前端按需加载**：路由与重型可视化组件按需加载，降低首屏包体，提升演示流畅度
+完整接口说明以 FastAPI 文档为准：<http://127.0.0.1:8000/docs>
 
 ## 测试
+
+后端测试：
 
 ```bash
 cd backend
 uv run pytest
 ```
 
+前端构建校验：
+
+```bash
+cd frontend
+npm run build
+```
+
 ## 项目结构
 
-```
+```text
 Competa/
-├── backend/                 # FastAPI 后端
+├── backend/
 │   ├── app/
-│   │   ├── agents/          # Collector / Survey / Interview / Fieldwork / Analyst / Writer / QA
-│   │   ├── api/             # REST API 端点
-│   │   ├── db/              # 数据库 session 管理
-│   │   ├── guardrails/      # Schema 校验层
-│   │   ├── llm/             # LLM 适配器 + Prompt 模板
-│   │   ├── models/          # SQLAlchemy ORM 模型
-│   │   ├── orchestration/   # LangGraph DAG + State + Runner
-│   │   ├── services/        # curation / export / screenshot 等服务层
-│   │   └── schemas/        # Pydantic Schema 定义
-│   └── tests/               # pytest 测试
-├── frontend/                # React 前端
+│   │   ├── agents/          # 各角色 Agent
+│   │   ├── api/             # REST API
+│   │   ├── db/              # 数据库与轻量迁移
+│   │   ├── guardrails/      # 报告与 schema 约束
+│   │   ├── llm/             # 模型适配与 prompt
+│   │   ├── models/          # ORM 模型
+│   │   ├── orchestration/   # LangGraph DAG、state、runner
+│   │   ├── schemas/         # Pydantic schema
+│   │   └── services/        # 搜索、筛选、导出、截图、评分
+│   └── tests/
+├── frontend/
 │   └── src/
-│       ├── api/             # API client
-│       ├── components/      # Layout 等公共组件
-│       └── pages/           # 页面组件（已按路由懒加载）
-└── reference/               # 参考项目（.gitignore）
+│       ├── api/
+│       ├── components/
+│       └── pages/
+├── reference/               # 本地参考项目，不参与主线开发
+├── start-dev.ps1
+└── start-dev.bat
 ```
+
+## 适合继续升级的方向
+
+- 更完整的运行观测面板，比如按节点拆分耗时、token、失败原因
+- 更细粒度的人工介入，不只在写作前暂停
+- PostgreSQL 持久化与多用户协作能力
+- 更强的 Eval 基准和回归数据集
+
+如果你是第一次接手这个项目，推荐的阅读顺序是：
+
+1. 先看这个 README，明确链路和运行方式
+2. 再看 [backend/app/orchestration/graph.py](backend/app/orchestration/graph.py)
+3. 然后看 [backend/app/orchestration/runner.py](backend/app/orchestration/runner.py) 和 [backend/app/api/tasks.py](backend/app/api/tasks.py)
+4. 最后再结合前端的 [frontend/src/pages/TaskCreate.tsx](frontend/src/pages/TaskCreate.tsx) 与 [frontend/src/pages/TaskDetail.tsx](frontend/src/pages/TaskDetail.tsx) 看用户路径
