@@ -255,6 +255,105 @@ def _qa_response(task_id: str) -> str:
         })
 
 
+def _survey_response() -> str:
+    return json.dumps({
+        "title": "用户竞品认知与使用偏好调研",
+        "description": "本问卷旨在了解目标用户对协同办公产品的认知、使用习惯及切换意愿，为竞品分析提供一手用户数据。",
+        "questions": [
+            {
+                "id": "q1",
+                "text": "您目前主要使用哪款协同办公工具？",
+                "type": "single_choice",
+                "options": ["飞书", "钉钉", "企业微信", "Notion", "其他"],
+                "dimension": "usage",
+            },
+            {
+                "id": "q2",
+                "text": "您选择该工具的最主要原因是什么？",
+                "type": "single_choice",
+                "options": ["功能丰富", "价格合理", "团队习惯", "生态集成", "用户体验", "其他"],
+                "dimension": "decision_factor",
+            },
+            {
+                "id": "q3",
+                "text": "您对当前使用的工具最不满意的地方是？",
+                "type": "open_ended",
+                "options": [],
+                "dimension": "pain_point",
+            },
+            {
+                "id": "q4",
+                "text": "如果有一款新工具能解决您的痛点，您愿意切换吗？",
+                "type": "single_choice",
+                "options": ["非常愿意", "可以考虑", "不太愿意", "完全不愿意"],
+                "dimension": "switching_intent",
+            },
+            {
+                "id": "q5",
+                "text": "请对以下功能按重要性排序（1-5，1为最重要）",
+                "type": "ranking",
+                "options": ["即时通讯", "文档协作", "视频会议", "项目管理", "日历与日程"],
+                "dimension": "feature_priority",
+            },
+        ],
+        "target_audience": "25-45岁知识工作者，团队规模10-500人，使用协同办公工具6个月以上",
+        "estimated_duration_min": 5,
+    })
+
+
+def _interview_response() -> str:
+    return json.dumps({
+        "title": "协同办公工具用户深度访谈提纲",
+        "target_persona": "团队管理者 / 重度用户",
+        "opening_script": "感谢您抽出时间参与本次访谈。我们想了解您在日常工作中使用协同办公工具的体验，包括您喜欢的方面和遇到的困难。本次访谈大约需要30分钟，过程中没有对错之分，请畅所欲言。",
+        "questions": [
+            {
+                "id": "iq1",
+                "phase": "opening",
+                "text": "请简单介绍一下您的日常工作流程，以及协同办公工具在其中的角色。",
+                "follow_ups": ["您一天中大概有多少时间在使用这些工具？", "和其他团队成员的协作频率如何？"],
+                "target_persona": "团队管理者",
+                "dimension": "context",
+            },
+            {
+                "id": "iq2",
+                "phase": "core",
+                "text": "在使用当前工具的过程中，有没有遇到过让您特别头疼的场景？",
+                "follow_ups": ["能举一个具体的例子吗？", "您当时是如何解决的？", "这个问题多久出现一次？"],
+                "target_persona": "团队管理者",
+                "dimension": "pain_point",
+            },
+            {
+                "id": "iq3",
+                "phase": "core",
+                "text": "您是否考虑过切换到其他协同办公工具？是什么促使您有（或没有）这个想法？",
+                "follow_ups": ["您评估过哪些替代方案？", "最大的顾虑是什么？", "迁移成本中哪个部分最让您担心？"],
+                "target_persona": "团队管理者",
+                "dimension": "switching",
+            },
+            {
+                "id": "iq4",
+                "phase": "probing",
+                "text": "如果让您给当前工具的产品经理提三个改进建议，您会说什么？",
+                "follow_ups": ["为什么是这三个？", "如果只能实现一个，您选哪个？"],
+                "target_persona": "重度用户",
+                "dimension": "improvement",
+            },
+            {
+                "id": "iq5",
+                "phase": "closing",
+                "text": "还有什么想补充的，或者我还没问到但您觉得重要的方面？",
+                "follow_ups": [],
+                "target_persona": "团队管理者",
+                "dimension": "open_feedback",
+            },
+        ],
+        "closing_script": "非常感谢您的宝贵时间！您的反馈对我们的竞品分析非常有价值。如果后续有需要澄清的地方，我们可能会通过邮件与您联系。再次感谢！",
+        "estimated_duration_min": 30,
+        "notes": "访谈时注意根据受访者角色调整问题侧重：管理者多问协作与管理功能，个人用户多问体验与效率。如受访者提到竞品，自然跟进询问对比体验。",
+    })
+
+
 async def call_mock_llm(
     messages: list[dict[str, str]],
     agent_name: str = "",
@@ -267,30 +366,44 @@ async def call_mock_llm(
     start = time.monotonic()
 
     # Detect agent from system message
+    # IMPORTANT: "competitive analysis" appears in most prompts — avoid it.
+    # Use role-specific keywords that uniquely identify each agent.
     system_msg = messages[0].get("content", "") if messages else ""
-    if "collector" in system_msg.lower() or "intelligence collector" in system_msg.lower():
+    sm = system_msg.lower()
+    if "intelligence collector" in sm or ("collector" in sm and "intelligence" in sm):
         content = _collector_response()
-    elif "user research operations" in system_msg.lower() or "research fieldwork" in system_msg.lower():
+    elif "user research operations" in sm:
         content = _fieldwork_response()
-    elif "analysis expert" in system_msg.lower() or "competitive analysis" in system_msg.lower():
+    elif "survey design expert" in sm:
+        content = _survey_response()
+    elif "user research expert" in sm and "interview" in sm:
+        content = _interview_response()
+    elif "competitive analysis expert" in sm:
         content = _analyst_response()
-    elif "report writer" in system_msg.lower() or "professional competitive" in system_msg.lower():
+    elif "report writer" in sm:
         content = _writer_response()
-    elif "quality assurance" in system_msg.lower() or "qa reviewer" in system_msg.lower():
+    elif "quality assurance reviewer" in sm:
         content = _qa_response(task_id)
     else:
         # Fallback: try to detect from user message
         user_msg = messages[-1].get("content", "") if messages else ""
-        if "collect" in user_msg.lower():
+        um = user_msg.lower()
+        if "collect information" in um or "gather information" in um:
             content = _collector_response()
-        elif "analyz" in user_msg.lower():
+        elif "design a survey" in um or "design a questionnaire" in um:
+            content = _survey_response()
+        elif "interview guide" in um or "semi-structured interview" in um:
+            content = _interview_response()
+        elif "fieldwork" in um or "simulate" in um:
+            content = _fieldwork_response()
+        elif "analyz" in um and "source" in um:
             content = _analyst_response()
-        elif "write" in user_msg.lower() or "report" in user_msg.lower():
+        elif "write" in um and "report" in um:
             content = _writer_response()
-        elif "review" in user_msg.lower() or "quality" in user_msg.lower():
+        elif "review" in um or ("quality" in um and "report" in um):
             content = _qa_response(task_id)
         else:
-            content = json.dumps({"error": "Unknown agent in mock mode"})
+            content = json.dumps({"error": f"Unknown agent in mock mode. system_msg: {sm[:100]}"})
 
     # Simulate some processing time
     await asyncio.sleep(0.1)

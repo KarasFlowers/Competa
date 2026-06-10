@@ -270,11 +270,19 @@ Report Structure Methodology:
 """
 
 
-def build_writer_prompt(analysis_json: str, target_product: str) -> str:
-    return (
+def build_writer_prompt(analysis_json: str, target_product: str, sources_json: str | None = None) -> str:
+    prompt = (
         f"Write a structured competitive analysis report for '{target_product}' "
         f"based on the following analysis data:\n\n{analysis_json}"
     )
+    if sources_json:
+        prompt += (
+            f"\n\nAvailable sources with their IDs:\n{sources_json}\n\n"
+            "CRITICAL: Use ONLY the exact 'id' values from the sources above as evidence_ids. "
+            "Each source id looks like a UUID (e.g. 'abc123-def456-...'). "
+            "Do NOT use section names like 'feature_trees' or 'pricing_models' as evidence_ids."
+        )
+    return prompt
 
 
 # ---------------------------------------------------------------------------

@@ -53,13 +53,22 @@ class WriterAgent(BaseAgent):
             - analysis: dict (AnalyzeResult)
             - target_product: str
             - task_id: str
+            - sources: list[dict] (optional, for evidence citation)
         """
         analysis = input_data.get("analysis", {})
         target_product = input_data.get("target_product", "")
         task_id = input_data.get("task_id", "")
+        sources = input_data.get("sources", [])
 
-        analysis_json = json.dumps(analysis, ensure_ascii=False, indent=2)
-        user_prompt = build_writer_prompt(analysis_json, target_product)
+        # Build source reference list (id + title only, for citation)
+        source_refs = [
+            {"id": s.get("id"), "title": s.get("title", ""), "type": s.get("type", "url")}
+            for s in (sources or []) if s.get("id")
+        ]
+        sources_json = json.dumps(source_refs, ensure_ascii=False, indent=2, default=str) if source_refs else None
+
+        analysis_json = json.dumps(analysis, ensure_ascii=False, indent=2, default=str)
+        user_prompt = build_writer_prompt(analysis_json, target_product, sources_json)
 
         # Inject ratchet constraints from previous QA feedback
         constraints = input_data.get("constraints", [])

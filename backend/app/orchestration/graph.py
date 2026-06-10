@@ -262,6 +262,7 @@ async def write_node(state: PipelineState) -> dict:
         "target_product": task.get("target_product", ""),
         "task_id": task_id,
         "constraints": constraints,
+        "sources": state.get("curated_sources") or state.get("sources", []),
     })
 
     llm_info = result.get("_llm_response", {})
@@ -282,58 +283,64 @@ def _filter_sections_recursive(sections: list[dict]) -> tuple[list[dict], int]:
     """Recursively filter claims without evidence from sections and subsections.
 
     Returns (filtered_sections, removed_count).
+    Accepts dicts or Pydantic models — normalises to dict on entry.
     """
     removed = 0
     filtered: list[dict] = []
     for section in sections:
-        claims = section.get("claims", [])
+        # Normalise: Pydantic model → dict
+        s = section.model_dump() if hasattr(section, 'model_dump') else section
+        if not isinstance(s, dict):
+            s = dict(s) if hasattr(s, '__iter__') else {}
+        claims = s.get("claims", [])
         valid_claims = [c for c in claims if c.get("evidence_ids")]
         removed += len(claims) - len(valid_claims)
 
-        sub_sections = section.get("subsections", [])
+        sub_sections = s.get("subsections", [])
         filtered_subs, sub_removed = _filter_sections_recursive(sub_sections)
         removed += sub_removed
 
-        filtered.append({**section, "claims": valid_claims, "subsections": filtered_subs})
+        filtered.append({**s, "claims": valid_claims, "subsections": filtered_subs})
     return filtered, removed
 
 
 async def screenshot_node(state: PipelineState) -> dict:
-    """Capture screenshots of competitor websites for visual evidence."""
+    """Capture screenshots of competitor websites for visual evidence.
+
+    Degrades gracefully: skips silently when Playwright isn't installed
+    (common on dev machines / headless servers).
+    """
     task_id = state.get("task_id", "")
     logger.info("DAG: screenshot_node starting for task %s", task_id)
     publish_event(task_id, {"agent": "screenshot", "status": "running"})
 
-    # Collect URLs to screenshot: competitor websites + top source URLs
-    urls_to_screenshot: list[str] = []
-    competitors = state.get("task", {}).get("competitors", [])
-    for c in competitors:
-        if isinstance(c, dict) and c.get("website"):
-            urls_to_screenshot.append(c["website"])
-
-    # Add top curated source URLs so screenshots follow the evidence actually used downstream.
-    sources = state.get("curated_sources") or state.get("sources", [])
-    for s in sources[:5]:
-        url = s.get("url", "")
-        if url and url not in urls_to_screenshot:
-            urls_to_screenshot.append(url)
-
-    # Cap at 8 screenshots total
-    urls_to_screenshot = urls_to_screenshot[:8]
-
     screenshot_results: list[dict[str, str | None]] = []
-    if urls_to_screenshot:
-        try:
+    try:
+        urls_to_screenshot: list[str] = []
+        competitors = state.get("task", {}).get("competitors", [])
+        for c in competitors:
+            if isinstance(c, dict) and c.get("website"):
+                urls_to_screenshot.append(c["website"])
+
+        sources = state.get("curated_sources") or state.get("sources", [])
+        for s in sources[:5]:
+            url = s.get("url", "")
+            if url and url not in urls_to_screenshot:
+                urls_to_screenshot.append(url)
+
+        urls_to_screenshot = urls_to_screenshot[:8]
+
+        if urls_to_screenshot:
             screenshot_results = await screenshot_webpages(urls_to_screenshot, task_id)
-        except Exception:
-            logger.warning("Screenshot batch failed for task %s", task_id, exc_info=True)
+    except Exception:
+        logger.info("Screenshot batch skipped (non-critical): %s", task_id)
 
     successful = [r for r in screenshot_results if r.get("path")]
     existing_traces = state.get("traces", [])
     trace = TraceEvent(
         agent_name="screenshot",
         event_type=EventType.OUTPUT,
-        output_summary=f"Captured {len(successful)} screenshots from {len(urls_to_screenshot)} URLs",
+        output_summary=f"Captured {len(successful)} screenshots",
     )
 
     publish_event(task_id, {

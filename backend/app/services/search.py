@@ -3,6 +3,7 @@
 Supports:
 - Tavily (AI-native, async, returns content directly) — SEARCH_PROVIDER=tavily
 - DuckDuckGo via ddgs (free, no API key) — SEARCH_PROVIDER=ddgs
+- Bing via scraping cn.bing.com (free, no API key, China-accessible) — SEARCH_PROVIDER=bing
 - None (disable search, LLM-only) — SEARCH_PROVIDER=none
 """
 
@@ -171,6 +172,108 @@ class DDGSSearchProvider:
 
 
 # ---------------------------------------------------------------------------
+# Bing provider (scraping cn.bing.com — works in China, no API key)
+# ---------------------------------------------------------------------------
+
+class BingSearchProvider:
+    """Search via Bing (cn.bing.com) — free, China-accessible, no API key.
+
+    Scrapes the HTML search results page. Rate-limited to avoid being blocked.
+    """
+
+    _SEARCH_URL = "https://cn.bing.com/search"
+
+    def __init__(self, fetch_content: bool | None = None) -> None:
+        self._fetch_content = (
+            fetch_content if fetch_content is not None
+            else settings.SEARCH_FETCH_CONTENT
+        )
+
+    async def search(
+        self, query: str, max_results: int | None = None
+    ) -> list[SearchResult]:
+        max_results = max_results or settings.SEARCH_MAX_RESULTS
+        try:
+            from bs4 import BeautifulSoup
+
+            async with httpx.AsyncClient(
+                timeout=15.0,
+                follow_redirects=True,
+                headers={
+                    "User-Agent": (
+                        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/120.0.0.0 Safari/537.36"
+                    ),
+                    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                },
+            ) as client:
+                resp = await client.get(
+                    self._SEARCH_URL,
+                    params={"q": query, "count": str(min(max_results, 15))},
+                )
+                resp.raise_for_status()
+
+            soup = BeautifulSoup(resp.text, "html.parser")
+            results: list[SearchResult] = []
+
+            # Bing result blocks: <li class="b_algo">
+            for item in soup.select("li.b_algo"):
+                if len(results) >= max_results:
+                    break
+                title_el = item.select_one("h2 a")
+                if not title_el:
+                    continue
+                title = title_el.get_text(strip=True)
+                url = title_el.get("href", "")
+                snippet_el = item.select_one(".b_caption p, .b_lineclamp2")
+                snippet = snippet_el.get_text(strip=True) if snippet_el else ""
+                if title and url:
+                    results.append(SearchResult(title=title, url=url, snippet=snippet[:300]))
+
+            # Optionally fetch full content for top results
+            if self._fetch_content and results:
+                await self._fetch_contents(results[:5])
+
+            return results
+
+        except Exception:
+            logger.warning("Bing search failed for query: %s", query, exc_info=True)
+            return []
+
+    async def _fetch_contents(self, results: list[SearchResult]) -> None:
+        try:
+            from bs4 import BeautifulSoup
+        except ImportError:
+            return
+
+        async with httpx.AsyncClient(
+            timeout=15.0, follow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; Competa/0.1)"},
+        ) as client:
+            tasks = [self._fetch_one(client, r) for r in results]
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _fetch_one(
+        self, client: httpx.AsyncClient, result: SearchResult
+    ) -> None:
+        if not result.url:
+            return
+        try:
+            from bs4 import BeautifulSoup
+
+            resp = await client.get(result.url)
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.text, "html.parser")
+            for tag in soup(["script", "style", "nav", "footer", "header"]):
+                tag.decompose()
+            text = soup.get_text(separator="\n", strip=True)
+            result.content = text[:3000] if len(text) > 3000 else text
+        except Exception:
+            logger.debug("Failed to fetch content from %s", result.url, exc_info=True)
+
+
+# ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
 
@@ -197,6 +300,9 @@ def get_search_provider() -> SearchProvider | None:
     elif provider_name == "ddgs":
         _provider_instance = DDGSSearchProvider()
         logger.info("Search provider: DuckDuckGo (ddgs)")
+    elif provider_name == "bing":
+        _provider_instance = BingSearchProvider()
+        logger.info("Search provider: Bing (cn.bing.com)")
     else:
         _provider_instance = None
         logger.info("Search provider: none (LLM-only mode)")

@@ -173,7 +173,7 @@ async def run_pipeline(task_id: str) -> None:
                 await session.execute(delete(SurveyModel).where(SurveyModel.task_id == task_id))
                 survey = SurveyModel(
                     task_id=task_id,
-                    content=survey_data,
+                    content=jsonable_encoder(survey_data),
                 )
                 session.add(survey)
 
@@ -183,7 +183,7 @@ async def run_pipeline(task_id: str) -> None:
                 await session.execute(delete(InterviewModel).where(InterviewModel.task_id == task_id))
                 interview = InterviewModel(
                     task_id=task_id,
-                    content=interview_data,
+                    content=jsonable_encoder(interview_data),
                 )
                 session.add(interview)
 
@@ -193,7 +193,7 @@ async def run_pipeline(task_id: str) -> None:
                 await session.execute(delete(AnalysisModel).where(AnalysisModel.task_id == task_id))
                 analysis = AnalysisModel(
                     task_id=task_id,
-                    content=analysis_data,
+                    content=jsonable_encoder(analysis_data),
                 )
                 session.add(analysis)
 
@@ -204,7 +204,7 @@ async def run_pipeline(task_id: str) -> None:
                 report = ReportModel(
                     task_id=task_id,
                     title=report_data.get("title", "Competitive Analysis Report"),
-                    content=report_data,
+                    content=jsonable_encoder(report_data),
                     status="final" if final_state.get("qa_feedback", {}).get("passed") else "draft",
                 )
                 session.add(report)
@@ -262,13 +262,13 @@ async def run_pipeline(task_id: str) -> None:
                 claim_count=metrics_data.get("claim_count", 0) if metrics_data else 0,
                 evidence_coverage_rate=metrics_data.get("evidence_coverage_rate", 0.0) if metrics_data else 0.0,
                 manual_correction_count=task.manual_correction_count or 0,
-                qa_feedback=final_state.get("qa_feedback", {}) or {},
-                handoff=final_state.get("handoff", {}) or {},
-                curation_summary=final_state.get("curation_summary", {}) or {},
+                qa_feedback=jsonable_encoder(final_state.get("qa_feedback", {}) or {}),
+                handoff=jsonable_encoder(final_state.get("handoff", {}) or {}),
+                curation_summary=jsonable_encoder(final_state.get("curation_summary", {}) or {}),
                 constraints=[str(value) for value in final_state.get("constraints", [])],
-                analysis=analysis_data or {},
-                report=report_data or {},
-                trace_events=trace_events or [],
+                analysis=jsonable_encoder(analysis_data or {}),
+                report=jsonable_encoder(report_data or {}),
+                trace_events=jsonable_encoder(trace_events or []),
             )
             session.add(run_history)
 

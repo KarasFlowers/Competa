@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Type, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
+logger = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
 
 
@@ -76,4 +78,9 @@ def validate_output(schema_cls: Type[T], data: Any) -> T:
             return schema_cls.model_validate(data)
     except ValidationError as ve:
         errors = _parse_validation_error(ve)
+        for e in errors:
+            logger.warning(
+                "Guardrail failed: schema=%s field=%s type=%s msg=%s",
+                schema_cls.__name__, e.field_path, e.error_type, e.message,
+            )
         raise GuardrailError(schema_name=schema_cls.__name__, errors=errors) from ve

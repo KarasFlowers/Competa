@@ -55,8 +55,8 @@ class QAAgent(BaseAgent):
         task_id = input_data.get("task_id", "")
         retry_count = input_data.get("retry_count", 0)
 
-        report_json = json.dumps(report, ensure_ascii=False, indent=2)
-        sources_json = json.dumps(sources, ensure_ascii=False, indent=2)
+        report_json = json.dumps(report, ensure_ascii=False, indent=2, default=str)
+        sources_json = json.dumps(sources, ensure_ascii=False, indent=2, default=str)
 
         user_prompt = build_qa_prompt(report_json, sources_json)
 

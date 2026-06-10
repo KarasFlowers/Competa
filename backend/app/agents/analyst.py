@@ -23,7 +23,7 @@ class AnalystAgent(BaseAgent):
         """
         sources = input_data.get("sources", [])
         # Pass structured summary, not full content
-        sources_summary = json.dumps(sources, ensure_ascii=False, indent=2)
+        sources_summary = json.dumps(sources, ensure_ascii=False, indent=2, default=str)
 
         user_prompt = build_analyst_prompt(sources_summary)
 
