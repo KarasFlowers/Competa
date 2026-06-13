@@ -219,7 +219,7 @@ class TestCollectorFallback:
         async def fake_search_products(self, target_product, competitors, industry):
             return search_results
 
-        async def fake_call_and_validate(self, user_prompt, output_schema, system_prompt=None):
+        async def fake_call_and_validate(self, user_prompt, output_schema, system_prompt=None, **kwargs):
             prompt_history.append(user_prompt)
             if "Content:" in user_prompt:
                 raise RuntimeError("collector: blocked") from LLMContentFilterError(

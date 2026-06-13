@@ -59,7 +59,7 @@ async def test_call_llm_raises_content_filter_error_after_retry(monkeypatch):
 
 
 async def test_base_agent_reports_provider_block_cleanly(monkeypatch):
-    async def fake_call_llm(messages):
+    async def fake_call_llm(messages, **kwargs):
         raise LLMContentFilterError("Your request was blocked.")
 
     monkeypatch.setattr("app.agents.base.call_llm", fake_call_llm)

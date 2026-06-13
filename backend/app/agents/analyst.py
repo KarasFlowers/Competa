@@ -35,6 +35,7 @@ class AnalystAgent(BaseAgent):
         validated, llm_resp, traces = await self.call_and_validate(
             user_prompt=user_prompt,
             output_schema=AnalyzeResult,
+            max_tokens=8192,
         )
 
         return {

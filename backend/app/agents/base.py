@@ -33,6 +33,7 @@ class BaseAgent:
         user_prompt: str,
         output_schema: Type[T],
         system_prompt: str | None = None,
+        max_tokens: int = 4096,
     ) -> tuple[T, LLMResponse, list[TraceEvent]]:
         """Call LLM, parse JSON, validate against schema, retry on failure.
 
@@ -48,9 +49,11 @@ class BaseAgent:
         traces: list[TraceEvent] = []
         last_error: Exception | None = None
         attempts_used = 0
+        current_max_tokens = max_tokens
 
         for attempt in range(1, self.max_retries + 1):
             attempts_used = attempt
+            llm_resp = None
             traces.append(TraceEvent(
                 agent_name=self.name,
                 event_type=EventType.START,
@@ -60,7 +63,7 @@ class BaseAgent:
             ))
 
             try:
-                llm_resp = await call_llm(messages)
+                llm_resp = await call_llm(messages, max_tokens=current_max_tokens)
 
                 # Parse JSON from LLM response
                 content = llm_resp.content.strip()
@@ -89,22 +92,41 @@ class BaseAgent:
             except json.JSONDecodeError as e:
                 last_error = e
                 logger.warning(
-                    "%s: JSON parse failed (attempt %d): %s", self.name, attempt, e
+                    "%s: JSON parse failed (attempt %d, max_tokens=%d): %s",
+                    self.name, attempt, current_max_tokens, e,
                 )
                 traces.append(TraceEvent(
                     agent_name=self.name,
                     event_type=EventType.ERROR,
                     error_message=f"JSON parse error: {e}",
-                    duration=llm_resp.duration,
+                    duration=llm_resp.duration if llm_resp else None,
                     retry_attempt=attempt,
                 ))
-                # Add error feedback to messages for retry
-                messages.append({"role": "assistant", "content": llm_resp.content})
-                messages.append({
-                    "role": "user",
-                    "content": f"Your response was not valid JSON. Error: {e}. "
-                    f"Please output valid JSON matching the required schema.",
-                })
+                # Detect truncation: if output tokens hit the limit or the
+                # error looks like an unterminated string, bump max_tokens.
+                is_truncated = (
+                    ("Unterminated string" in str(e))
+                    or (llm_resp is not None and llm_resp.output_tokens >= current_max_tokens * 0.9)
+                )
+                if is_truncated and current_max_tokens < 32768:
+                    current_max_tokens = min(current_max_tokens * 2, 65536)
+                    logger.info(
+                        "%s: output appears truncated, increasing max_tokens to %d for retry",
+                        self.name, current_max_tokens,
+                    )
+                # Keep conversation lean: only include a short excerpt of the
+                # failed response so retries don't bloat the input context.
+                failed_content = llm_resp.content if llm_resp else ""
+
+                excerpt = (failed_content[:200] + "\n...\n[truncated — JSON parse error]") if len(failed_content) > 300 else failed_content
+                messages.append({"role": "assistant", "content": excerpt})
+                hint = (
+                    "Your response was not valid JSON. Error: {e}. "
+                    "Please output valid JSON. If the output is very large, "
+                    "prioritise conciseness — shorten descriptions and keep only "
+                    "the most important data."
+                ).format(e=e)
+                messages.append({"role": "user", "content": hint})
 
             except GuardrailError as e:
                 last_error = e

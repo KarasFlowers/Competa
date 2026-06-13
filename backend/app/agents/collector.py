@@ -216,6 +216,7 @@ class CollectorAgent(BaseAgent):
             validated, llm_resp, traces = await self.call_and_validate(
                 user_prompt=user_prompt,
                 output_schema=CollectResult,
+                max_tokens=8192,
             )
         except RuntimeError as exc:
             provider_blocked = isinstance(exc.__cause__, LLMContentFilterError)
@@ -240,6 +241,7 @@ class CollectorAgent(BaseAgent):
             validated, llm_resp, traces = await self.call_and_validate(
                 user_prompt=fallback_prompt,
                 output_schema=CollectResult,
+                max_tokens=8192,
             )
 
         # Convert sources to dicts with IDs for downstream use
