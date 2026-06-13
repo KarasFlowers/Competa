@@ -73,13 +73,12 @@ export default function InterviewView() {
     toast("访谈提纲已复制到剪贴板", "success");
   };
 
-  if (error) return <div className="p-8 text-red-600">{error}</div>;
-  if (!interview) return <div className="p-8 text-gray-500">加载中...</div>;
-
-  // Group questions by phase
   const phases = ["opening", "core", "probing", "closing"] as const;
+
+  // Pre-compute question indices (must be before any early return — hook rules)
   const qIndexByPhase = useMemo(() => {
     const map = new Map<typeof phases[number], number[]>();
+    if (!interview) return map;
     let idx = 0;
     for (const phase of phases) {
       const nums: number[] = [];
@@ -92,7 +91,10 @@ export default function InterviewView() {
       map.set(phase, nums);
     }
     return map;
-  }, [interview.questions]);
+  }, [interview, phases]);
+
+  if (error) return <div className="p-8 text-red-600">{error}</div>;
+  if (!interview) return <div className="p-8 text-gray-500">加载中...</div>;
 
   return (
     <div className="max-w-3xl mx-auto p-6 space-y-6">
