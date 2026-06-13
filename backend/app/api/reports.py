@@ -7,10 +7,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_session
-from app.models.database import MetricsModel, ReportModel, SourceModel
+from app.models.database import MetricsModel, ReportModel, SourceModel, TaskModel
 from app.services.export import report_to_docx, report_to_markdown
 
 router = APIRouter()
+
+# Allowed export formats
+_EXPORT_FORMATS = frozenset({"markdown", "md", "docx", "word"})
 
 
 # ---------------------------------------------------------------------------
@@ -64,6 +67,9 @@ async def get_report(task_id: str, session: AsyncSession = Depends(get_session))
 
 @router.get("/{task_id}/sources", response_model=list[SourceResponse])
 async def get_sources(task_id: str, session: AsyncSession = Depends(get_session)):
+    task = await session.get(TaskModel, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
     result = await session.execute(
         select(SourceModel)
         .where(SourceModel.task_id == task_id)
@@ -157,6 +163,11 @@ async def export_report(
     ]
 
     fmt = format.lower().strip()
+    if fmt not in _EXPORT_FORMATS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported format '{format}'. Use markdown or docx.",
+        )
     if fmt == "docx" or fmt == "word":
         try:
             docx_bytes = report_to_docx(report.content, sources)

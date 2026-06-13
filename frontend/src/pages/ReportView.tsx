@@ -108,7 +108,9 @@ export default function ReportView() {
       manual_correction_count: r.data.manual_correction_count ?? 0,
       last_curation_summary: r.data.last_curation_summary ?? {},
     })).catch(() => setTaskMeta(null));
-    sourceApi.list(id).then((r) => setSources(r.data)).catch(() => {});
+    sourceApi.list(id).then((r) => setSources(r.data)).catch(() => {
+      console.warn("Failed to load sources for task", id);
+    });
     analysisApi.get(id).then((r) => setAnalysis(r.data)).catch(() => setAnalysis(null));
   }, [id]);
 
@@ -556,13 +558,14 @@ function SourceModal({ source, onClose }: { source: Source; onClose: () => void 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={onClose}>
       <div
+        role="dialog" aria-modal="true" aria-label="来源详情"
         className="bg-white rounded-2xl shadow-xl max-w-lg w-full mx-4 max-h-[80vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="p-6 space-y-4">
           <div className="flex justify-between items-start">
             <h3 className="text-lg font-semibold text-gray-900">{source.title || "来源详情"}</h3>
-            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl">&times;</button>
+            <button onClick={onClose} aria-label="关闭" className="text-gray-400 hover:text-gray-600 text-xl">&times;</button>
           </div>
 
           <div className="space-y-2 text-sm">

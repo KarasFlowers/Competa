@@ -153,7 +153,7 @@ def report_to_docx(report: dict[str, Any], sources: list[dict[str, Any]] | None 
 
     # Title
     title = report.get("title", "Competitive Analysis Report")
-    doc.add_heading(title, level=0)
+    doc.add_heading(title, level=1)
 
     # Executive summary
     summary = report.get("executive_summary", "")

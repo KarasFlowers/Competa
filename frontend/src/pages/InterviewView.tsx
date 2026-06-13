@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { interviewApi, type InterviewData, type InterviewQuestion } from "../api/client";
 import { ArrowLeft, ClipboardCopy, Clock, Users, MessageCircle } from "lucide-react";
@@ -78,7 +78,21 @@ export default function InterviewView() {
 
   // Group questions by phase
   const phases = ["opening", "core", "probing", "closing"] as const;
-  let qIndex = 0;
+  const qIndexByPhase = useMemo(() => {
+    const map = new Map<typeof phases[number], number[]>();
+    let idx = 0;
+    for (const phase of phases) {
+      const nums: number[] = [];
+      for (const q of interview.questions) {
+        if (q.phase === phase) {
+          idx += 1;
+          nums.push(idx);
+        }
+      }
+      map.set(phase, nums);
+    }
+    return map;
+  }, [interview.questions]);
 
   return (
     <div className="max-w-3xl mx-auto p-6 space-y-6">
@@ -121,9 +135,9 @@ export default function InterviewView() {
             <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">
               {PHASE_LABELS[phase]}
             </h3>
-            {phaseQuestions.map((q) => {
-              qIndex += 1;
-              return <InterviewQuestionCard key={q.id || qIndex} q={q} index={qIndex} />;
+            {phaseQuestions.map((q, qi) => {
+              const idx = (qIndexByPhase.get(phase) ?? [])[qi] ?? 0;
+              return <InterviewQuestionCard key={q.id || `${phase}-${qi}`} q={q} index={idx} />;
             })}
           </div>
         );

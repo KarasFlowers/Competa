@@ -13,7 +13,7 @@ import {
   Search,
   Sparkles,
 } from "lucide-react";
-import { taskApi, externalHref, type CompetitorInput, type TaskOverviewItem, type TaskOverviewResponse } from "../api/client";
+import { taskApi, externalHref, formatWebsiteLabel, type CompetitorInput, type TaskOverviewItem, type TaskOverviewResponse } from "../api/client";
 
 const ACTIVE_STATUSES = new Set([
   "collecting",
@@ -87,9 +87,6 @@ function formatTime(value: string) {
   return new Date(value).toLocaleString();
 }
 
-function formatWebsiteLabel(url: string) {
-  return url.replace(/^https?:\/\//i, "").replace(/\/$/, "");
-}
 
 function formatBriefPreview(value: string | null | undefined) {
   const trimmed = value?.trim();
@@ -503,6 +500,7 @@ export default function TasksWorkspace() {
               type="search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
+              aria-label="搜索任务"
               placeholder="搜索任务名、官网、行业、竞品或研究 brief"
               className="w-full rounded-2xl border border-gray-200 bg-gray-50 py-3 pl-11 pr-4 text-sm text-gray-900 outline-none transition-colors placeholder:text-gray-400 focus:border-blue-300 focus:bg-white"
             />

@@ -8,8 +8,13 @@ import logging
 import time
 from collections import defaultdict
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db.session import get_session
+from app.models.database import TaskModel
 
 logger = logging.getLogger(__name__)
 
@@ -70,8 +75,11 @@ def _cleanup_stale_subscribers() -> None:
 # ---------------------------------------------------------------------------
 
 @router.get("/{task_id}/events")
-async def task_events(task_id: str, request: Request):
+async def task_events(task_id: str, request: Request, session: AsyncSession = Depends(get_session)):
     """Stream pipeline progress events for a task via SSE."""
+    task = await session.get(TaskModel, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
 
     async def event_generator():
         q = subscribe(task_id)

@@ -148,7 +148,9 @@ export default function Landing() {
   const [demos, setDemos] = useState<DemoScenarioSummary[]>([]);
 
   useEffect(() => {
-    demoApi.list().then((r) => setDemos(r.data)).catch(() => {});
+    demoApi.list().then((r) => setDemos(r.data)).catch(() => {
+      console.warn("Demo scenarios failed to load — they will not be shown on this page.");
+    });
   }, []);
 
   return (

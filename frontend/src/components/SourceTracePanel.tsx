@@ -50,6 +50,7 @@ export default function SourceTracePanel({ source, claims, onClose }: SourceTrac
         </h3>
         <button
           onClick={onClose}
+          aria-label="关闭溯源面板"
           className="text-gray-400 hover:text-gray-600 p-1 rounded hover:bg-gray-100"
         >
           <X className="w-4 h-4" />

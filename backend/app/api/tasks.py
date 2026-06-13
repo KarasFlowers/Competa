@@ -27,7 +27,7 @@ from app.orchestration.runner import run_pipeline
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-STARTABLE_TASK_STATUSES = ("pending", "failed", "completed")
+STARTABLE_TASK_STATUSES = ("pending", "failed", "completed", "awaiting_review")
 ACTIVE_TASK_STATUSES = (
     "collecting",
     "surveying",
@@ -602,15 +602,19 @@ async def submit_correction(
             .order_by(ReportModel.created_at.desc())
         )
         report = result.scalars().first()
-        if report:
-            content = report.content or {}
-            claim_id = data.get("claim_id", "")
-            new_content = data.get("content", "")
-            claim = _find_claim_recursive(content.get("sections", []), claim_id)
-            if claim:
-                claim["content"] = new_content
-            report.content = content
-            flag_modified(report, "content")
+        if not report:
+            raise HTTPException(status_code=404, detail="No report found for this task")
+        content = report.content or {}
+        claim_id = data.get("claim_id", "")
+        if not claim_id:
+            raise HTTPException(status_code=400, detail="claim_id is required for edit_claim")
+        new_content = data.get("content", "")
+        claim = _find_claim_recursive(content.get("sections", []), claim_id)
+        if not claim:
+            raise HTTPException(status_code=404, detail=f"Claim '{claim_id}' not found in report")
+        claim["content"] = new_content
+        report.content = content
+        flag_modified(report, "content")
         # Increment manual_correction_count on metrics
         mresult = await session.execute(
             select(MetricsModel).where(MetricsModel.task_id == task_id)
