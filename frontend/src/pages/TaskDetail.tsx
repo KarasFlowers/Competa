@@ -134,6 +134,7 @@ export default function TaskDetail() {
   const [error, setError] = useState("");
   const [sseEvent, setSseEvent] = useState<SSEEvent | null>(null);
   const [showSourceModal, setShowSourceModal] = useState(false);
+  const [showRerunModal, setShowRerunModal] = useState(false);
   const [newSource, setNewSource] = useState({ title: "", url: "", content_snippet: "", type: "url" });
   const [reviewInstruction, setReviewInstruction] = useState("");
   const [continuingReview, setContinuingReview] = useState(false);
@@ -387,63 +388,101 @@ export default function TaskDetail() {
       </div>
 
       {/* Actions */}
-      <div className="flex gap-3">
-        {["pending", "failed", "completed"].includes(task.status) && (
+      <div className="flex flex-wrap gap-3">
+        {["pending", "failed"].includes(task.status) && (
           <button
             onClick={handleRun}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
-            title={task.status === "completed" ? "清空当前结果与资料，从头重新运行任务" : undefined}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition whitespace-nowrap"
           >
-            {task.status === "completed" ? "全量重跑" : task.status === "failed" ? "重新开始" : "启动分析"}
+            {task.status === "failed" ? "重新开始" : "启动分析"}
           </button>
         )}
         {task.status === "completed" && (
-          <div className="flex gap-3">
+          <div className="flex flex-wrap gap-3">
             <Link
               to={`/tasks/${id}/report`}
-              className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition"
+              className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition whitespace-nowrap"
             >
               查看报告
             </Link>
             <Link
               to={`/tasks/${id}/traces`}
-              className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 flex items-center gap-2 transition"
+              className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 flex items-center gap-2 transition whitespace-nowrap"
             >
               <Activity className="w-4 h-4" />
               执行追踪
             </Link>
             <Link
               to={`/tasks/${id}/survey`}
-              className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 flex items-center gap-2 transition"
+              className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 flex items-center gap-2 transition whitespace-nowrap"
             >
               <ClipboardList className="w-4 h-4" />
               问卷
             </Link>
             <Link
               to={`/tasks/${id}/interview`}
-              className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 flex items-center gap-2 transition"
+              className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 flex items-center gap-2 transition whitespace-nowrap"
             >
               <MessageSquareText className="w-4 h-4" />
               访谈提纲
             </Link>
             <button
               onClick={() => setShowSourceModal(true)}
-              className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 flex items-center gap-2 transition"
+              className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 flex items-center gap-2 transition whitespace-nowrap"
             >
               <Plus className="w-4 h-4" />
               补充资料
             </button>
             <button
-              onClick={handleRerun}
-              className="px-4 py-2 bg-white border border-blue-300 text-blue-700 rounded-lg hover:bg-blue-50 flex items-center gap-2 transition"
-              title="保留现有资料和约束，重新生成报告"
+              onClick={() => setShowRerunModal(true)}
+              className="px-4 py-2 bg-white border border-blue-300 text-blue-700 rounded-lg hover:bg-blue-50 flex items-center gap-2 transition whitespace-nowrap"
+              title="选择重跑模式：全量重跑 或 保留资料重生成"
             >
               <RefreshCw className="w-4 h-4" />
-              保留资料重生成
+              重跑
             </button>
           </div>
         )}
       </div>
+
+      {/* Rerun Mode Modal */}
+      {showRerunModal && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => setShowRerunModal(false)}>
+          <div
+            role="dialog" aria-modal="true" aria-label="选择重跑模式"
+            className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-sm mx-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-lg font-semibold text-gray-900 mb-4">选择重跑模式</h2>
+            <div className="space-y-3">
+              <button
+                onClick={() => { setShowRerunModal(false); handleRun(); }}
+                className="w-full rounded-xl border border-gray-200 bg-gray-50 px-5 py-4 text-left hover:border-blue-200 hover:bg-blue-50 transition"
+              >
+                <div className="font-semibold text-gray-900">全量重跑</div>
+                <div className="mt-1 text-sm text-gray-500">
+                  清空当前结果与资料，从头重新运行完整流水线
+                </div>
+              </button>
+              <button
+                onClick={() => { setShowRerunModal(false); handleRerun(); }}
+                className="w-full rounded-xl border border-gray-200 bg-gray-50 px-5 py-4 text-left hover:border-blue-200 hover:bg-blue-50 transition"
+              >
+                <div className="font-semibold text-gray-900">保留资料重生成</div>
+                <div className="mt-1 text-sm text-gray-500">
+                  保留已采集的来源和约束，只重新生成报告、问卷等产物
+                </div>
+              </button>
+            </div>
+            <button
+              onClick={() => setShowRerunModal(false)}
+              className="mt-4 w-full py-2 text-sm text-gray-500 hover:text-gray-700 transition"
+            >
+              取消
+            </button>
+          </div>
+        </div>
+      )}
 
       {task.status === "awaiting_review" && (
         <section className="rounded-2xl border border-cyan-200 bg-cyan-50 p-5">

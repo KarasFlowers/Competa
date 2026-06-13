@@ -242,6 +242,10 @@ export interface SSEEvent {
   retry_count?: number | null;
   evidence_coverage_rate?: number | null;
   removed_claims?: number | null;
+  kept_sources?: number | null;
+  removed_sources?: number | null;
+  screenshots_captured?: number | null;
+  added_sources?: number | null;
 }
 
 export const taskApi = {
