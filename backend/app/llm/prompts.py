@@ -11,6 +11,39 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from app.services.search import SearchResult
 
+
+# ---------------------------------------------------------------------------
+# Output language directive
+# ---------------------------------------------------------------------------
+
+# Map language code → directive appended to the system prompt. The directive is
+# appended (never replaces the prompt) so the mock client's English-keyword
+# agent detection keeps working. Unknown codes fall back to Simplified Chinese.
+_LANGUAGE_DIRECTIVES = {
+    "zh": (
+        "IMPORTANT: Write ALL human-readable string values (titles, summaries, "
+        "descriptions, claims, questions, quotes, findings, notes, etc.) in "
+        "Simplified Chinese (简体中文). Keep JSON keys, enum values, and IDs in "
+        "English exactly as the schema specifies."
+    ),
+    "en": (
+        "IMPORTANT: Write ALL human-readable string values in English. "
+        "Keep JSON keys, enum values, and IDs exactly as the schema specifies."
+    ),
+}
+
+DEFAULT_OUTPUT_LANGUAGE = "zh"
+
+
+def language_directive(lang: str | None) -> str:
+    """Return the system-prompt language directive for the given code.
+
+    Falls back to Simplified Chinese for unknown / empty codes.
+    """
+    code = (lang or DEFAULT_OUTPUT_LANGUAGE).lower()
+    return _LANGUAGE_DIRECTIVES.get(code, _LANGUAGE_DIRECTIVES[DEFAULT_OUTPUT_LANGUAGE])
+
+
 # ---------------------------------------------------------------------------
 # Collector Agent
 # ---------------------------------------------------------------------------

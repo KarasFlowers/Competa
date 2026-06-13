@@ -59,6 +59,7 @@ class WriterAgent(BaseAgent):
         target_product = input_data.get("target_product", "")
         task_id = input_data.get("task_id", "")
         sources = input_data.get("sources", [])
+        output_language = input_data.get("output_language", "zh")
 
         # Build source reference list (id + title only, for citation)
         source_refs = [
@@ -79,6 +80,7 @@ class WriterAgent(BaseAgent):
             user_prompt=user_prompt,
             output_schema=WriterReportOutput,
             max_tokens=16384,
+            output_language=output_language,
         )
 
         report = {

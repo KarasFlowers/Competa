@@ -23,6 +23,7 @@ class TaskModel(Base):
     competitors: Mapped[dict] = mapped_column(JSON, default=list)
     focus_areas: Mapped[list] = mapped_column(JSON, default=list)
     our_product_notes: Mapped[str] = mapped_column(Text, default="")
+    output_language: Mapped[str] = mapped_column(String(8), default="zh")
     human_review_required: Mapped[bool] = mapped_column(Boolean, default=False)
     manual_correction_count: Mapped[int] = mapped_column(Integer, default=0)
     last_qa_feedback: Mapped[dict] = mapped_column(JSON, default=dict)

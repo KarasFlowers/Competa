@@ -179,6 +179,7 @@ export default function TaskCreate() {
   const [mustAnswerQuestions, setMustAnswerQuestions] = useState("");
   const [ourContext, setOurContext] = useState("");
   const [humanReviewRequired, setHumanReviewRequired] = useState(false);
+  const [outputLanguage, setOutputLanguage] = useState<"zh" | "en">("zh");
   const [selectedFocusAreas, setSelectedFocusAreas] = useState<string[]>([
     "功能能力",
     "定价与包装",
@@ -261,6 +262,7 @@ export default function TaskCreate() {
         competitors: competitorPayload,
         focus_areas: normalizedFocusAreas,
         our_product_notes: briefPreview,
+        output_language: outputLanguage,
         human_review_required: humanReviewRequired,
       });
 
@@ -367,6 +369,37 @@ export default function TaskCreate() {
                   className="mt-2 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-900 outline-none transition-colors placeholder:text-gray-400 focus:border-cyan-300 focus:bg-white"
                 />
               </label>
+
+              <div className="mt-4">
+                <div className="text-sm font-medium text-gray-700">报告语言</div>
+                <div className="mt-2 flex gap-2">
+                  {[
+                    { value: "zh", label: "简体中文" },
+                    { value: "en", label: "English" },
+                  ].map((option) => {
+                    const selected = option.value === outputLanguage;
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => setOutputLanguage(option.value as "zh" | "en")}
+                        className={[
+                          "rounded-xl border px-4 py-2 text-sm font-medium transition-colors",
+                          selected
+                            ? "border-cyan-300 bg-cyan-50 text-cyan-900"
+                            : "border-gray-200 bg-gray-50 text-gray-600 hover:border-cyan-200",
+                        ].join(" ")}
+                      >
+                        <Globe className="inline h-3.5 w-3.5 mr-1.5 opacity-60" />
+                        {option.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="mt-1.5 text-xs leading-5 text-gray-500">
+                  Agent 生成的来源、问卷、访谈、分析和报告将以此语言输出。
+                </p>
+              </div>
             </div>
 
             <div className="mt-6">

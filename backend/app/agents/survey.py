@@ -29,6 +29,7 @@ class SurveyAgent(BaseAgent):
         industry = input_data.get("industry", "")
         focus_areas = input_data.get("focus_areas")
         our_product_notes = input_data.get("our_product_notes", "")
+        output_language = input_data.get("output_language", "zh")
 
         # Normalize competitor names
         competitor_names = [
@@ -47,6 +48,7 @@ class SurveyAgent(BaseAgent):
         validated, llm_resp, traces = await self.call_and_validate(
             user_prompt=user_prompt,
             output_schema=SurveyOutput,
+            output_language=output_language,
         )
 
         return {

@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from app.guardrails.validator import GuardrailError, validate_output
 from app.llm.client import LLMContentFilterError, LLMResponse, call_llm
+from app.llm.prompts import language_directive
 from app.schemas.trace import EventType, TraceEvent
 
 T = TypeVar("T", bound=BaseModel)
@@ -34,6 +35,7 @@ class BaseAgent:
         output_schema: Type[T],
         system_prompt: str | None = None,
         max_tokens: int = 4096,
+        output_language: str = "zh",
     ) -> tuple[T, LLMResponse, list[TraceEvent]]:
         """Call LLM, parse JSON, validate against schema, retry on failure.
 
@@ -41,6 +43,7 @@ class BaseAgent:
             (validated_output, llm_response, trace_events)
         """
         sys_prompt = system_prompt or self.system_prompt
+        sys_prompt = f"{sys_prompt}\n\n{language_directive(output_language)}"
         messages = [
             {"role": "system", "content": sys_prompt},
             {"role": "user", "content": user_prompt},
