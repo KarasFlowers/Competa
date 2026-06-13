@@ -45,6 +45,10 @@ async def _migrate_add_columns(conn) -> None:
         ("run_history", "quality_score", "FLOAT DEFAULT 0.0"),
         ("run_history", "quality_breakdown", "JSON DEFAULT '{}'"),
         ("run_history", "curation_summary", "JSON DEFAULT '{}'"),
+        ("run_history", "constraints", "JSON DEFAULT '[]'"),
+        ("run_history", "analysis", "JSON DEFAULT '{}'"),
+        ("run_history", "report", "JSON DEFAULT '{}'"),
+        ("run_history", "trace_events", "JSON DEFAULT '[]'"),
     ]
     for table, column, col_type in migrations:
         try:

@@ -145,7 +145,7 @@ function createMarkdownComponents(compact: boolean) {
       </strong>
     ),
     em: ({ children }: { children?: ReactNode }) => (
-      <em className="italic text-blue-600 font-medium not-italic">
+      <em className="italic text-blue-600 font-medium">
         {children}
       </em>
     ),

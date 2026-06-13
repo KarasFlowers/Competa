@@ -13,29 +13,12 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from app.services.search import _is_url_safe
+
 logger = logging.getLogger(__name__)
 
 # Default output directory relative to project root
 SCREENSHOTS_DIR = os.environ.get("COMPETA_SCREENSHOTS_DIR", "screenshots")
-
-# Internal/unsafe URL patterns (reuse logic from search.py)
-_BLOCKED_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
-_BLOCKED_SCHEMES = {"file", "ftp"}
-
-
-def _is_url_safe(url: str) -> bool:
-    """Reject internal / unsafe URLs to prevent SSRF."""
-    try:
-        parsed = urlparse(url)
-    except Exception:
-        return False
-    if parsed.scheme in _BLOCKED_SCHEMES:
-        return False
-    if parsed.hostname in _BLOCKED_HOSTS:
-        return False
-    if parsed.hostname and parsed.hostname.endswith(".local"):
-        return False
-    return True
 
 
 def _url_to_filename(url: str) -> str:

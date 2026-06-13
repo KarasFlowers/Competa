@@ -5,6 +5,7 @@ import {
   reportApi,
   sourceApi,
   analysisApi,
+  externalHref,
   type Report,
   type ReportExportFormat,
   type Source,
@@ -52,8 +53,8 @@ function hasCurationMetadata(source: Source) {
   );
 }
 
-function formatReliability(score?: number) {
-  if (score === undefined) {
+function formatReliability(score?: number | null) {
+  if (score == null) {
     return "--";
   }
   return `${(score * 100).toFixed(0)}%`;
@@ -519,7 +520,7 @@ function SourceListItem({
           {source.title || source.url || source.id}
         </button>
         <span className="text-xs text-gray-400">[{source.type}]</span>
-        {source.reliability_score !== undefined ? (
+        {source.reliability_score != null ? (
           <ReliabilityBadge score={source.reliability_score} />
         ) : null}
         {showIncludedBadge ? (
@@ -586,12 +587,12 @@ function SourceModal({ source, onClose }: { source: Source; onClose: () => void 
             {source.url && (
               <div>
                 <span className="font-medium text-gray-600">链接：</span>{" "}
-                <a href={source.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline break-all">
+                <a href={externalHref(source.url)} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline break-all">
                   {source.url}
                 </a>
               </div>
             )}
-            {source.reliability_score !== undefined && (
+            {source.reliability_score != null && (
               <div className="flex items-center gap-2">
                 <span className="font-medium text-gray-600">可信度：</span>{" "}
                 <ReliabilityBadge score={source.reliability_score} />

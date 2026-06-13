@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { X, ExternalLink, Link2, ShieldCheck } from "lucide-react";
 import type { Source, Claim } from "../api/client";
+import { externalHref } from "../api/client";
 import MarkdownContent from "./MarkdownContent";
 import { ReliabilityBadge } from "./ReliabilityBadge";
 
@@ -67,7 +68,7 @@ export default function SourceTracePanel({ source, claims, onClose }: SourceTrac
             <span className="px-2 py-0.5 bg-gray-100 rounded text-xs text-gray-600">
               {source.type}
             </span>
-            {source.reliability_score !== undefined && (
+            {source.reliability_score != null && (
               <ReliabilityBadge score={source.reliability_score} />
             )}
             <span
@@ -98,7 +99,7 @@ export default function SourceTracePanel({ source, claims, onClose }: SourceTrac
 
           {source.url && (
             <a
-              href={source.url}
+              href={externalHref(source.url)}
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-1.5 text-xs text-blue-600 hover:underline break-all"
@@ -152,7 +153,7 @@ export default function SourceTracePanel({ source, claims, onClose }: SourceTrac
             <>
               <span>→</span>
               <a
-                href={source.url}
+                href={externalHref(source.url)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-blue-500 hover:underline"

@@ -534,6 +534,46 @@ class TestRunAndStatus:
         assert task.manual_correction_count == 1
         assert any(row.constraint_value.startswith("CONSTRAINT: human review") for row in constraints)
 
+    async def test_second_continue_after_review_conflicts_after_atomic_claim(self, client: AsyncClient, monkeypatch):
+        monkeypatch.setattr("app.api.tasks.run_pipeline", _noop_run_pipeline)
+        resp = await client.post(
+            "/api/tasks",
+            json={"target_product": "ReviewNoDouble", "human_review_required": True},
+        )
+        task_id = resp.json()["id"]
+
+        async with TestSession() as session:
+            task = await session.get(TaskModel, task_id)
+            task.status = "awaiting_review"
+            await session.commit()
+
+        first = await client.post(f"/api/tasks/{task_id}/continue", json={"instruction": "first"})
+        second = await client.post(f"/api/tasks/{task_id}/continue", json={"instruction": "second"})
+
+        assert first.status_code == 202
+        assert second.status_code == 409
+        assert "writing" in second.json()["detail"]
+
+    async def test_background_exception_marks_task_failed(self, client: AsyncClient, monkeypatch):
+        async def _boom_run_pipeline(task_id: str, *, resume: bool = False) -> None:
+            raise RuntimeError("runner exploded")
+
+        monkeypatch.setattr("app.api.tasks.run_pipeline", _boom_run_pipeline)
+        monkeypatch.setattr("app.api.tasks.async_session", TestSession)
+        resp = await client.post("/api/tasks", json={"target_product": "FailingBackground"})
+        task_id = resp.json()["id"]
+
+        run = await client.post(f"/api/tasks/{task_id}/run")
+        for _ in range(10):
+            await asyncio.sleep(0)
+
+        assert run.status_code == 202
+        async with TestSession() as session:
+            task = await session.get(TaskModel, task_id)
+
+        assert task.status == "failed"
+        assert task.last_qa_feedback["issues"][0]["issue_type"] == "background_task_error"
+
     async def test_completed_task_can_run_again_and_purges_old_artifacts(self, client: AsyncClient, monkeypatch):
         monkeypatch.setattr("app.api.tasks.run_pipeline", _noop_run_pipeline)
         resp = await client.post("/api/tasks", json={"target_product": "RerunTarget"})
@@ -621,6 +661,23 @@ class TestRunAndStatus:
             for model in (ReportModel, TraceModel, MetricsModel, AnalysisModel, SurveyModel, InterviewModel):
                 result = await session.execute(model.__table__.select().where(model.task_id == task_id))
                 assert result.first() is None
+
+    async def test_second_rerun_conflicts_after_atomic_claim(self, client: AsyncClient, monkeypatch):
+        monkeypatch.setattr("app.api.tasks.run_pipeline", _noop_run_pipeline)
+        resp = await client.post("/api/tasks", json={"target_product": "NoDoubleRerun"})
+        task_id = resp.json()["id"]
+
+        async with TestSession() as session:
+            task = await session.get(TaskModel, task_id)
+            task.status = "completed"
+            await session.commit()
+
+        first = await client.post(f"/api/tasks/{task_id}/rerun")
+        second = await client.post(f"/api/tasks/{task_id}/rerun")
+
+        assert first.status_code == 202
+        assert second.status_code == 409
+        assert "collecting" in second.json()["detail"]
 
     async def test_status_endpoint(self, client: AsyncClient):
         resp = await client.post("/api/tasks", json={"target_product": "StatusTest"})

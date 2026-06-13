@@ -10,9 +10,12 @@ Supports:
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
+import socket
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
@@ -140,7 +143,7 @@ class DDGSSearchProvider:
             return
 
         async with httpx.AsyncClient(
-            timeout=15.0, follow_redirects=True, headers={
+            timeout=15.0, headers={
                 "User-Agent": "Mozilla/5.0 (compatible; Competa/0.1)"
             }
         ) as client:
@@ -156,8 +159,7 @@ class DDGSSearchProvider:
         try:
             from bs4 import BeautifulSoup
 
-            resp = await client.get(result.url)
-            resp.raise_for_status()
+            resp = await _safe_get(client, result.url)
             soup = BeautifulSoup(resp.text, "html.parser")
 
             # Remove script/style elements
@@ -198,7 +200,6 @@ class BingSearchProvider:
 
             async with httpx.AsyncClient(
                 timeout=15.0,
-                follow_redirects=True,
                 headers={
                     "User-Agent": (
                         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -248,7 +249,7 @@ class BingSearchProvider:
             return
 
         async with httpx.AsyncClient(
-            timeout=15.0, follow_redirects=True,
+            timeout=15.0,
             headers={"User-Agent": "Mozilla/5.0 (compatible; Competa/0.1)"},
         ) as client:
             tasks = [self._fetch_one(client, r) for r in results]
@@ -262,8 +263,7 @@ class BingSearchProvider:
         try:
             from bs4 import BeautifulSoup
 
-            resp = await client.get(result.url)
-            resp.raise_for_status()
+            resp = await _safe_get(client, result.url)
             soup = BeautifulSoup(resp.text, "html.parser")
             for tag in soup(["script", "style", "nav", "footer", "header"]):
                 tag.decompose()
@@ -321,29 +321,110 @@ def reset_search_provider() -> None:
 # ---------------------------------------------------------------------------
 
 # Internal network / unsafe URL patterns to block
+_ALLOWED_SCHEMES = {"http", "https"}
 _BLOCKED_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
-_BLOCKED_SCHEMES = {"file", "ftp"}
+_MAX_REDIRECTS = 5
 
 # Cache parsed robots.txt rules per host to avoid refetching
 _ROBOTS_CACHE: dict[str, object] = {}
 _ROBOTS_USER_AGENT = "Competa"
 
 
+def _is_ip_address_safe(ip: ipaddress._BaseAddress) -> bool:
+    """Return False for addresses that should never be fetched by user input."""
+    return not (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
+
+
+def _resolve_hostname(hostname: str) -> list[ipaddress._BaseAddress]:
+    """Resolve host to IP addresses for SSRF checks."""
+    resolved: list[ipaddress._BaseAddress] = []
+    for family, _socktype, _proto, _canonname, sockaddr in socket.getaddrinfo(hostname, None):
+        raw_ip = sockaddr[0]
+        # IPv6 sockaddr can include a scope suffix on some platforms.
+        if "%" in raw_ip:
+            raw_ip = raw_ip.split("%", 1)[0]
+        try:
+            resolved.append(ipaddress.ip_address(raw_ip))
+        except ValueError:
+            logger.debug("Skipping unparsable resolved address %s for %s", raw_ip, hostname)
+    return resolved
+
+
 def _is_url_safe(url: str) -> bool:
     """Reject internal / unsafe URLs to prevent SSRF."""
-    from urllib.parse import urlparse
-
     try:
         parsed = urlparse(url)
     except Exception:
         return False
-    if parsed.scheme in _BLOCKED_SCHEMES:
+
+    scheme = parsed.scheme.lower()
+    if scheme not in _ALLOWED_SCHEMES:
         return False
-    if parsed.hostname in _BLOCKED_HOSTS:
+
+    hostname = (parsed.hostname or "").strip().rstrip(".").lower()
+    if not hostname:
         return False
-    if parsed.hostname and parsed.hostname.endswith(".local"):
+    if hostname in _BLOCKED_HOSTS or hostname.endswith(".local"):
         return False
-    return True
+
+    try:
+        return _is_ip_address_safe(ipaddress.ip_address(hostname))
+    except ValueError:
+        pass
+
+    try:
+        resolved = _resolve_hostname(hostname)
+    except socket.gaierror:
+        logger.debug("DNS resolution failed for %s", hostname, exc_info=True)
+        return False
+    except Exception:
+        logger.debug("DNS safety check failed for %s", hostname, exc_info=True)
+        return False
+
+    if not resolved:
+        return False
+    return all(_is_ip_address_safe(ip) for ip in resolved)
+
+
+async def _safe_get(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    max_redirects: int = _MAX_REDIRECTS,
+    raise_for_status: bool = True,
+) -> httpx.Response:
+    """GET a URL while validating every redirect target."""
+    current_url = url
+    for _ in range(max_redirects + 1):
+        if not _is_url_safe(current_url):
+            raise ValueError(f"URL blocked (internal/unsafe): {current_url}")
+
+        resp = await client.get(current_url)
+        is_redirect = bool(getattr(resp, "is_redirect", False))
+        if is_redirect:
+            location = resp.headers.get("location")
+            if not location:
+                if raise_for_status and hasattr(resp, "raise_for_status"):
+                    resp.raise_for_status()
+                return resp
+            next_url = urljoin(str(getattr(resp, "url", current_url)), location)
+            if not _is_url_safe(next_url):
+                raise ValueError(f"Redirect blocked (internal/unsafe): {next_url}")
+            current_url = next_url
+            continue
+
+        if raise_for_status and hasattr(resp, "raise_for_status"):
+            resp.raise_for_status()
+        return resp
+
+    raise ValueError(f"Too many redirects while fetching: {url}")
 
 
 async def _is_fetch_allowed(url: str) -> bool:
@@ -374,10 +455,10 @@ async def _is_fetch_allowed(url: str) -> bool:
         robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
         try:
             async with httpx.AsyncClient(
-                timeout=8.0, follow_redirects=True,
+                timeout=8.0,
                 headers={"User-Agent": f"{_ROBOTS_USER_AGENT}/0.1"},
             ) as client:
-                resp = await client.get(robots_url)
+                resp = await _safe_get(client, robots_url, raise_for_status=False)
             if resp.status_code >= 400:
                 # No robots.txt (or forbidden) → allowed by convention
                 parser.parse([])
@@ -430,11 +511,9 @@ async def fetch_webpage(
     try:
         async with httpx.AsyncClient(
             timeout=timeout,
-            follow_redirects=True,
             headers={"User-Agent": "Mozilla/5.0 (compatible; Competa/0.1)"},
         ) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
+            resp = await _safe_get(client, url)
 
         soup = BeautifulSoup(resp.text, "html.parser")
 

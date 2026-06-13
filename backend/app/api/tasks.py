@@ -8,7 +8,8 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
-from app.db.session import get_session
+from app.db.session import async_session, get_session
+from app.guardrails.redact import safe_error_message
 from app.models.database import (
     AnalysisModel,
     ConstraintModel,
@@ -51,6 +52,51 @@ def _create_tracked_task(coro) -> asyncio.Task:
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
     return task
+
+
+async def _mark_task_failed(task_id: str, error: Exception) -> None:
+    """Best-effort fallback when a background runner crashes before persisting failure."""
+    async with async_session() as session:
+        await session.execute(
+            update(TaskModel)
+            .where(TaskModel.id == task_id, TaskModel.status.in_(ACTIVE_TASK_STATUSES))
+            .values(
+                status="failed",
+                last_qa_feedback={
+                    "passed": False,
+                    "issues": [
+                        {
+                            "issue_type": "background_task_error",
+                            "field_path": "pipeline",
+                            "description": safe_error_message(error),
+                            "severity": "critical",
+                        }
+                    ],
+                },
+                updated_at=datetime.now(UTC),
+            )
+        )
+        await session.commit()
+
+
+async def _run_pipeline_safely(
+    task_id: str,
+    *,
+    label: str,
+    resume: bool = False,
+    state_overrides: dict | None = None,
+) -> None:
+    try:
+        if state_overrides is None:
+            await run_pipeline(task_id, resume=resume)
+        else:
+            await run_pipeline(task_id, resume=resume, state_overrides=state_overrides)
+    except Exception as exc:
+        logger.exception("Background %s failed for task %s", label, task_id)
+        try:
+            await _mark_task_failed(task_id, exc)
+        except Exception:
+            logger.exception("Failed to mark task %s as failed after background crash", task_id)
 
 
 def _normalize_focus_areas(values: list[str] | None) -> list[str]:
@@ -374,14 +420,11 @@ async def run_task(task_id: str, session: AsyncSession = Depends(get_session)):
         task.last_curation_summary = {}
     await session.commit()
 
-    # Launch pipeline in background with exception logging only after claim is committed.
-    async def _safe_run():
-        try:
-            await run_pipeline(task_id, resume=resume_from_checkpoint)
-        except Exception:
-            logger.exception("Background pipeline failed for task %s", task_id)
-
-    _create_tracked_task(_safe_run())
+    _create_tracked_task(_run_pipeline_safely(
+        task_id,
+        label="pipeline",
+        resume=resume_from_checkpoint,
+    ))
     return {"message": "Pipeline started", "task_id": task_id}
 
 
@@ -415,10 +458,19 @@ async def continue_after_review(
     task = await session.get(TaskModel, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    if task.status != "awaiting_review":
+
+    result = await session.execute(
+        update(TaskModel)
+        .where(TaskModel.id == task_id, TaskModel.status == "awaiting_review")
+        .values(status="writing", updated_at=datetime.now(UTC))
+    )
+    if result.rowcount == 0:
+        await session.rollback()
+        current_task = await session.get(TaskModel, task_id)
+        current_status = current_task.status if current_task else "unknown"
         raise HTTPException(
             status_code=409,
-            detail=f"Task is in '{task.status}' state, cannot continue review",
+            detail=f"Task is in '{current_status}' state, cannot continue review",
         )
 
     existing_cons = await session.execute(
@@ -435,23 +487,20 @@ async def continue_after_review(
             applied_to="writer",
         ))
         constraints.append(constraint_value)
-        task.manual_correction_count += 1
+        await session.execute(
+            update(TaskModel)
+            .where(TaskModel.id == task_id)
+            .values(manual_correction_count=TaskModel.manual_correction_count + 1)
+        )
 
-    task.status = "writing"
-    task.updated_at = datetime.now(UTC)
     await session.commit()
 
-    async def _safe_run():
-        try:
-            await run_pipeline(
-                task_id,
-                resume=True,
-                state_overrides={"constraints": constraints},
-            )
-        except Exception:
-            logger.exception("Background review continuation failed for task %s", task_id)
-
-    _create_tracked_task(_safe_run())
+    _create_tracked_task(_run_pipeline_safely(
+        task_id,
+        label="review continuation",
+        resume=True,
+        state_overrides={"constraints": constraints},
+    ))
     return {"message": "Pipeline continued", "task_id": task_id}
 
 
@@ -770,30 +819,40 @@ async def rerun_task(task_id: str, session: AsyncSession = Depends(get_session))
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    if task.status not in STARTABLE_TASK_STATUSES:
+    result = await session.execute(
+        update(TaskModel)
+        .where(
+            TaskModel.id == task_id,
+            TaskModel.status.in_(STARTABLE_TASK_STATUSES),
+        )
+        .values(
+            status="collecting",
+            last_qa_feedback={},
+            last_handoff={},
+            last_curation_summary={},
+            updated_at=datetime.now(UTC),
+        )
+    )
+    if result.rowcount == 0:
+        await session.rollback()
+        current_task = await session.get(TaskModel, task_id)
+        current_status = current_task.status if current_task else "unknown"
         raise HTTPException(
             status_code=409,
-            detail=f"Task is in '{task.status}' state, cannot rerun",
+            detail=f"Task is in '{current_status}' state, cannot rerun",
         )
 
     # Clear generated artifacts from the last run, but keep sources and constraints.
     for model in (ReportModel, TraceModel, MetricsModel, SurveyModel, InterviewModel, AnalysisModel):
         await session.execute(delete(model).where(model.task_id == task_id))
 
-    task.status = "collecting"
-    task.last_qa_feedback = {}
-    task.last_handoff = {}
-    task.last_curation_summary = {}
-    task.updated_at = datetime.now(UTC)
     await session.commit()
 
-    async def _safe_run():
-        try:
-            await run_pipeline(task_id, resume=False)
-        except Exception:
-            logger.exception("Background rerun failed for task %s", task_id)
-
-    _create_tracked_task(_safe_run())
+    _create_tracked_task(_run_pipeline_safely(
+        task_id,
+        label="rerun",
+        resume=False,
+    ))
     return {"message": "Pipeline rerun started", "task_id": task_id}
 
 
