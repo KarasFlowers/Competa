@@ -35,7 +35,6 @@ venv/
 node_modules/
 npm-debug.log*
 yarn-error.log*
-package-lock.json
 yarn.lock
 pnpm-lock.yaml
 
@@ -63,6 +62,8 @@ docs/
 # Backend 特定
 backend/.pytest_cache/
 backend/competa.db
+backend/competa.db-wal
+backend/competa.db-shm
 
 # 本地修缮/调试中间文件
 *_enc.txt
@@ -72,5 +73,6 @@ backend/competa.db
 frontend/src/pages/Landing_tmp.tsx
 frontend/build_errors.txt
 frontend/tsc_errors.txt
+frontend/tsconfig.tsbuildinfo
 backend-dev.log
 frontend-dev.log

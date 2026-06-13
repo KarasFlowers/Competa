@@ -11,6 +11,9 @@ from app.services.search import (
 )
 
 
+PUBLIC_TEST_IP = "93.184.216.34"
+
+
 # ---------------------------------------------------------------------------
 # SearchResult dataclass
 # ---------------------------------------------------------------------------
@@ -261,6 +264,70 @@ class TestCollectorFallback:
         assert result["sources"][0]["url"] == "https://example.com/pricing"
 
 
+class TestUrlSafety:
+    def test_blocks_unsafe_schemes_and_internal_hosts(self, monkeypatch):
+        from app.services import search
+
+        assert search._is_url_safe("ftp://example.com/file") is False
+        assert search._is_url_safe("file:///etc/passwd") is False
+        assert search._is_url_safe("https://localhost/admin") is False
+        assert search._is_url_safe("https://example.local/page") is False
+
+    def test_blocks_private_and_link_local_ip_literals(self):
+        from app.services import search
+
+        assert search._is_url_safe("http://10.0.0.1") is False
+        assert search._is_url_safe("http://192.168.1.10") is False
+        assert search._is_url_safe("http://169.254.169.254/latest/meta-data") is False
+        assert search._is_url_safe("http://[::1]/") is False
+        assert search._is_url_safe("http://[fe80::1]/") is False
+
+    def test_blocks_dns_names_that_resolve_to_private_ips(self, monkeypatch):
+        from app.services import search
+
+        monkeypatch.setattr(
+            search.socket,
+            "getaddrinfo",
+            lambda *args, **kwargs: [(search.socket.AF_INET, 0, 0, "", ("10.0.0.8", 0))],
+        )
+
+        assert search._is_url_safe("https://metadata.example.com") is False
+
+    def test_allows_public_dns_resolution(self, monkeypatch):
+        from app.services import search
+
+        monkeypatch.setattr(
+            search.socket,
+            "getaddrinfo",
+            lambda *args, **kwargs: [(search.socket.AF_INET, 0, 0, "", (PUBLIC_TEST_IP, 0))],
+        )
+
+        assert search._is_url_safe("https://example.com") is True
+
+    async def test_safe_get_blocks_redirect_to_private_ip(self, monkeypatch):
+        from app.services import search
+
+        monkeypatch.setattr(
+            search.socket,
+            "getaddrinfo",
+            lambda *args, **kwargs: [(search.socket.AF_INET, 0, 0, "", (PUBLIC_TEST_IP, 0))],
+        )
+
+        class _Resp:
+            is_redirect = True
+            headers = {"location": "http://169.254.169.254/latest/meta-data"}
+            url = "https://example.com/start"
+            status_code = 302
+            text = ""
+
+        class _Client:
+            async def get(self, url):
+                return _Resp()
+
+        with pytest.raises(ValueError, match="Redirect blocked"):
+            await search._safe_get(_Client(), "https://example.com/start")
+
+
 # ---------------------------------------------------------------------------
 # _find_claim_recursive (from tasks.py)
 # ---------------------------------------------------------------------------
@@ -339,6 +406,11 @@ class TestRobotsCompliance:
 
         search.reset_robots_cache()
         monkeypatch.setattr(search.settings, "RESPECT_ROBOTS_TXT", True)
+        monkeypatch.setattr(
+            search.socket,
+            "getaddrinfo",
+            lambda *args, **kwargs: [(search.socket.AF_INET, 0, 0, "", (PUBLIC_TEST_IP, 0))],
+        )
 
         class _Resp:
             status_code = 200
@@ -365,6 +437,11 @@ class TestRobotsCompliance:
 
         search.reset_robots_cache()
         monkeypatch.setattr(search.settings, "RESPECT_ROBOTS_TXT", True)
+        monkeypatch.setattr(
+            search.socket,
+            "getaddrinfo",
+            lambda *args, **kwargs: [(search.socket.AF_INET, 0, 0, "", (PUBLIC_TEST_IP, 0))],
+        )
 
         class _Resp:
             status_code = 404

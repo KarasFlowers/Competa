@@ -2,6 +2,7 @@ import { Suspense, lazy, useEffect, useState, type ComponentType } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   demoApi,
+  externalHref,
   type DemoScenarioDetail,
   type DemoSource,
   type ReportSection,
@@ -141,14 +142,14 @@ export default function DemoView() {
             {scenario.sources.map((s) => (
               <li key={s.id} className="text-sm flex items-center gap-2">
                 {s.url ? (
-                  <a href={s.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+                  <a href={externalHref(s.url)} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
                     {s.title || s.url}
                   </a>
                 ) : (
                   <span>{s.title || s.id}</span>
                 )}
                 <span className="text-gray-400 text-xs">[{s.type}]</span>
-                {s.reliability_score !== undefined && (
+                {s.reliability_score != null && (
                   <ReliabilityBadge score={s.reliability_score} />
                 )}
               </li>

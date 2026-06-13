@@ -91,3 +91,7 @@ async def test_migrate_add_columns_repairs_legacy_sqlite_schema(tmp_path):
     assert "quality_score" in run_history_columns
     assert "quality_breakdown" in run_history_columns
     assert "curation_summary" in run_history_columns
+    assert "constraints" in run_history_columns
+    assert "analysis" in run_history_columns
+    assert "report" in run_history_columns
+    assert "trace_events" in run_history_columns

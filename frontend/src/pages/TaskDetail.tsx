@@ -4,6 +4,7 @@ import {
   taskApi,
   metricsApi,
   analysisApi,
+  externalHref,
   type AnalysisData,
   type CurationSummary,
   type ConstraintSummary,
@@ -98,8 +99,8 @@ function hasCurationSummary(summary: CurationSummary | null | undefined) {
   return Boolean(summary && Object.keys(summary).length > 0);
 }
 
-function formatReliability(value: number | undefined) {
-  if (value === undefined) {
+function formatReliability(value: number | null | undefined) {
+  if (value == null) {
     return "--";
   }
   return `${(value * 100).toFixed(0)}%`;
@@ -343,7 +344,7 @@ export default function TaskDetail() {
           </p>
           {task.target_website ? (
             <a
-              href={task.target_website}
+              href={externalHref(task.target_website)}
               target="_blank"
               rel="noopener noreferrer"
               className="mt-3 inline-flex items-center gap-2 rounded-full border border-cyan-100 bg-cyan-50 px-3 py-1.5 text-sm font-medium text-cyan-700 transition-colors hover:border-cyan-200 hover:bg-cyan-100"
@@ -462,7 +463,7 @@ export default function TaskDetail() {
                   <span className="text-xs text-gray-400">({category})</span>
                 )}
                 {website && (
-                  <a href={website} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline text-xs ml-1">🔗</a>
+                  <a href={externalHref(website)} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline text-xs ml-1">🔗</a>
                 )}
               </span>
             );

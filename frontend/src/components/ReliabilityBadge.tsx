@@ -1,8 +1,16 @@
 interface ReliabilityBadgeProps {
-  score: number;
+  score: number | null | undefined;
 }
 
 export function ReliabilityBadge({ score }: ReliabilityBadgeProps) {
+  if (score == null) {
+    return (
+      <span className="px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-500">
+        --
+      </span>
+    );
+  }
+
   const pct = Math.round(score * 100);
   let label: string;
   let colorClass: string;

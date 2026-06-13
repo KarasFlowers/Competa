@@ -13,7 +13,7 @@ import {
   Search,
   Sparkles,
 } from "lucide-react";
-import { taskApi, type CompetitorInput, type TaskOverviewItem, type TaskOverviewResponse } from "../api/client";
+import { taskApi, externalHref, type CompetitorInput, type TaskOverviewItem, type TaskOverviewResponse } from "../api/client";
 
 const ACTIVE_STATUSES = new Set([
   "collecting",
@@ -221,7 +221,7 @@ function TaskCard({ task }: { task: TaskOverviewItem }) {
           </div>
           {task.target_website ? (
             <a
-              href={task.target_website}
+              href={externalHref(task.target_website)}
               target="_blank"
               rel="noopener noreferrer"
               title={task.target_website}

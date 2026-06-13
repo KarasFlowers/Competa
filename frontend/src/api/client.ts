@@ -5,6 +5,13 @@ const api = axios.create({
   headers: { "Content-Type": "application/json" },
 });
 
+export function externalHref(url: string | null | undefined) {
+  const trimmed = url?.trim() ?? "";
+  if (!trimmed) return "";
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return `https://${trimmed.replace(/^\/+/, "")}`;
+}
+
 export interface CompetitorInput {
   name: string;
   category: string;  // direct | indirect | substitute
@@ -18,7 +25,7 @@ export interface CurationSummary {
   kept_count?: number;
   removed_count?: number;
   first_party_count?: number;
-  avg_reliability?: number;
+  avg_reliability?: number | null;
   removed_reasons?: Record<string, number>;
 }
 
@@ -129,7 +136,7 @@ export interface Source {
   url: string | null;
   title: string;
   content_snippet: string;
-  reliability_score?: number;
+  reliability_score?: number | null;
   included_in_analysis: boolean;
   curation_reason: string;
   curation_tags: string[];
@@ -283,7 +290,7 @@ export interface DemoSource {
   url: string | null;
   title: string;
   content_snippet: string;
-  reliability_score: number;
+  reliability_score: number | null;
 }
 
 export interface DemoTrace {
