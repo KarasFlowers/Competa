@@ -94,16 +94,18 @@ function FeatureMatrix({ trees }: { trees: FeatureTree[] }) {
                   const node = lookup.get(t.product_name)?.get(fname);
                   const meta = STATUS_CELL[node?.status || "missing"] || STATUS_CELL.missing;
                   return (
-                    <td key={t.product_name} className="px-4 py-2.5 text-center">
-                      <span
-                        className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${meta.cls}`}
-                        title={node?.description || node?.status || "missing"}
-                      >
-                        {meta.label}
-                      </span>
-                      {node?.description && (
-                        <div className="text-[11px] text-gray-400 mt-0.5 max-w-[140px] mx-auto leading-tight">{node.description}</div>
-                      )}
+                    <td key={t.product_name} className="px-4 py-2.5 text-center align-top">
+                      <div className="flex flex-col items-center">
+                        <span
+                          className={`inline-flex items-center justify-center w-9 h-9 rounded-full text-sm font-bold shrink-0 ${meta.cls}`}
+                          title={node?.description || node?.status || "missing"}
+                        >
+                          {meta.label}
+                        </span>
+                        {node?.description && (
+                          <div className="text-[11px] text-gray-400 mt-0.5 max-w-[140px] leading-tight">{node.description}</div>
+                        )}
+                      </div>
                     </td>
                   );
                 })}

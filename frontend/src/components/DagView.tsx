@@ -21,8 +21,8 @@ import { CheckCircle, XCircle, Clock, Loader2, AlertTriangle } from "lucide-reac
 // Dagre auto-layout
 // ---------------------------------------------------------------------------
 
-const NODE_WIDTH = 220;
-const NODE_HEIGHT = 76;
+const NODE_WIDTH = 240;
+const NODE_HEIGHT = 78;
 
 function layoutWithDagre(nodes: Node[], edges: Edge[]): { nodes: Node[]; edges: Edge[] } {
   const g = new dagre.graphlib.Graph();
@@ -95,18 +95,64 @@ function StatusIcon({ status }: { status: string }) {
 }
 
 // ---------------------------------------------------------------------------
-// Custom node component
+// Agent metrics — accumulated from SSE events
 // ---------------------------------------------------------------------------
 
-function AgentNode({ data }: { data: Node["data"] & { label: string; nodeType: string; status: string } }) {
+interface AgentMetrics {
+  tokens?: number | null;
+  duration?: number | null;
+  // curator signals
+  keptSources?: number;
+  removedSources?: number;
+  // filter signals
+  removedClaims?: number;
+  // qa signals
+  passed?: boolean | null;
+  evidenceCoverageRate?: number | null;
+  // fieldwork signals
+  sourcesAdded?: number;
+  // screenshot signals
+  screenshotsCaptured?: number;
+}
+
+function formatTokens(n?: number | null) {
+  if (n == null) return null;
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  return `${n}`;
+}
+
+function formatDuration(s?: number | null) {
+  if (s == null) return null;
+  return `${s.toFixed(1)}s`;
+}
+
+function agentMetricsLine(m: AgentMetrics): string | null {
+  const parts: string[] = [];
+  const t = formatTokens(m.tokens);
+  const d = formatDuration(m.duration);
+  if (t) parts.push(`${t} tokens`);
+  if (d) parts.push(d);
+  if (m.sourcesAdded != null) parts.push(`+${m.sourcesAdded} 来源`);
+  if (m.keptSources != null) parts.push(`纳入 ${m.keptSources}`);
+  if (m.removedClaims != null) parts.push(`-${m.removedClaims} 声明`);
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+// ---------------------------------------------------------------------------
+// Custom node component (with metrics badge & breathing pulse)
+// ---------------------------------------------------------------------------
+
+function AgentNode({ data }: { data: Node["data"] & { label: string; nodeType: string; status: string; metrics: AgentMetrics } }) {
   const style = STATUS_STYLES[data.status] ?? STATUS_STYLES.pending;
   const isRunning = data.status === "running";
+  const metricsText = agentMetricsLine(data.metrics ?? {});
+
   return (
     <>
       <Handle type="target" position={Position.Left} className="w-2 h-2 opacity-0" />
       <div
-        className={`px-5 py-4 rounded-2xl border-2 shadow-sm flex items-center gap-3.5 min-w-[200px] h-full transition-all ${style.bg} ${style.border} ${
-          isRunning ? "ring-4 ring-blue-200 shadow-lg scale-105" : ""
+        className={`px-5 py-3 rounded-2xl border-2 shadow-sm flex items-center gap-3.5 min-w-[200px] h-full transition-all ${style.bg} ${style.border} ${
+          isRunning ? "ring-4 ring-blue-200 shadow-lg scale-105 dag-breathing" : ""
         }`}
       >
         <div className="flex-shrink-0">
@@ -117,6 +163,11 @@ function AgentNode({ data }: { data: Node["data"] & { label: string; nodeType: s
           <span className="text-xs text-gray-400 uppercase tracking-wider mt-0.5">
             {data.nodeType === "tool" ? "工具" : "Agent"}
           </span>
+          {metricsText && (
+            <span className="text-[11px] text-gray-400 mt-0.5 truncate">
+              {metricsText}
+            </span>
+          )}
         </div>
       </div>
       <Handle type="source" position={Position.Right} className="w-2 h-2 opacity-0" />
@@ -130,12 +181,12 @@ const nodeTypes = { agentNode: AgentNode };
 // Convert API data → React Flow elements
 // ---------------------------------------------------------------------------
 
-function toFlowElements(dag: DagStructure) {
+function toFlowElements(dag: DagStructure, metrics: Record<string, AgentMetrics>) {
   const nodes: Node[] = dag.nodes.map((n: DagNode) => ({
     id: n.id,
     type: "agentNode",
     position: { x: 0, y: 0 },
-    data: { label: n.label, nodeType: n.type, status: n.status },
+    data: { label: n.label, nodeType: n.type, status: n.status, metrics: metrics[n.id] ?? {} },
   }));
 
   // Map node id -> status, to drive edge highlighting
@@ -145,7 +196,6 @@ function toFlowElements(dag: DagStructure) {
     const isRetry = e.label === "retry";
     const sourceStatus = statusById.get(e.source);
     const targetStatus = statusById.get(e.target);
-    // The "live" edge: flow heading into the currently running node.
     const isRunningInto = targetStatus === "running";
     const isCompletedPath = sourceStatus === "completed" && targetStatus === "completed";
 
@@ -161,15 +211,19 @@ function toFlowElements(dag: DagStructure) {
       strokeWidth = 2;
     }
 
+    // Flowing animation: retry edges, running-into edges, AND completed path edges
+    const animated = isRetry || isRunningInto || isCompletedPath;
+
     return {
       id: `e-${e.source}-${e.target}-${i}`,
       source: e.source,
       target: e.target,
-      label: e.label ?? undefined,
       style: isRetry
         ? { stroke, strokeDasharray: "6 3", strokeWidth: 2 }
-        : { stroke, strokeWidth },
-      animated: isRetry || isRunningInto,
+        : isCompletedPath
+          ? { stroke, strokeWidth, strokeDasharray: "4 6" }
+          : { stroke, strokeWidth },
+      animated,
       type: "smoothstep",
     };
   });
@@ -190,6 +244,8 @@ interface DagViewProps {
 export default function DagView({ taskId, onNodeClick, height = "320px" }: DagViewProps) {
   const [dag, setDag] = useState<DagStructure | null>(null);
   const [loading, setLoading] = useState(true);
+  // Accumulated per-agent metrics from SSE events
+  const [agentMetrics, setAgentMetrics] = useState<Record<string, AgentMetrics>>({});
 
   // Fetch DAG data
   useEffect(() => {
@@ -226,6 +282,23 @@ export default function DagView({ taskId, onNodeClick, height = "320px" }: DagVi
             ),
           };
         });
+        // Accumulate agent metrics from event payload
+        if (evt.agent && evt.status === "completed") {
+          setAgentMetrics((prev) => ({
+            ...prev,
+            [evt.agent]: {
+              tokens: evt.tokens ?? prev[evt.agent]?.tokens,
+              duration: evt.duration ?? prev[evt.agent]?.duration,
+              keptSources: evt.kept_sources ?? prev[evt.agent]?.keptSources,
+              removedSources: evt.removed_sources ?? prev[evt.agent]?.removedSources,
+              removedClaims: evt.removed_claims ?? prev[evt.agent]?.removedClaims,
+              sourcesAdded: evt.added_sources ?? prev[evt.agent]?.sourcesAdded,
+              screenshotsCaptured: evt.screenshots_captured ?? prev[evt.agent]?.screenshotsCaptured,
+              passed: evt.passed ?? prev[evt.agent]?.passed,
+              evidenceCoverageRate: evt.evidence_coverage_rate ?? prev[evt.agent]?.evidenceCoverageRate,
+            },
+          }));
+        }
       } catch { /* ignore parse errors */ }
     });
     return () => es.close();
@@ -234,14 +307,16 @@ export default function DagView({ taskId, onNodeClick, height = "320px" }: DagVi
   // Build React Flow elements
   const { initialNodes, initialEdges } = useMemo(() => {
     if (!dag) return { initialNodes: [], initialEdges: [] };
-    const { nodes, edges } = toFlowElements(dag);
+    const { nodes, edges } = toFlowElements(dag, agentMetrics);
     return { initialNodes: nodes, initialEdges: edges };
-  }, [dag]);
+  }, [dag, agentMetrics]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
 
   const rfInstance = useRef<ReactFlowInstance<Node, Edge> | null>(null);
+  const userInteractingRef = useRef(false);
+  const focusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Sync when dag changes
   useEffect(() => {
@@ -249,29 +324,64 @@ export default function DagView({ taskId, onNodeClick, height = "320px" }: DagVi
     setEdges(initialEdges);
   }, [initialNodes, initialEdges, setNodes, setEdges]);
 
-  // Dynamic focus: when a node is running, smoothly pan/zoom to keep it
-  // (and the next step) in view. When nothing is running (idle or replay),
-  // fit the whole graph so the user sees the full structure.
+  // Dynamic focus: zoom into the running node + its immediate successors.
+  // Pauses when the user drags/zooms manually, resumes after 3 s idle.
   const runningNodeId = useMemo(
     () => nodes.find((n) => (n.data?.status as string) === "running")?.id,
     [nodes]
   );
 
+  const edgeMap = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const e of edges) {
+      const targets = map.get(e.source) ?? [];
+      targets.push(e.target);
+      map.set(e.source, targets);
+    }
+    return map;
+  }, [edges]);
+
+  const doFocus = useCallback((rf: ReactFlowInstance<Node, Edge>) => {
+    const rid = runningNodeId;
+    if (rid) {
+      const nextIds = edgeMap.get(rid) ?? [];
+      const focusIds = [rid, ...nextIds.slice(0, 2)];
+      const focusNodes = focusIds
+        .map((nid) => rf.getNode(nid))
+        .filter(Boolean) as Node[];
+      if (focusNodes.length > 0) {
+        rf.fitView({ nodes: focusNodes, padding: 0.35, duration: 700, maxZoom: 1.5 });
+      }
+    } else {
+      rf.fitView({ padding: 0.2, duration: 700 });
+    }
+  }, [runningNodeId, edgeMap]);
+
   useEffect(() => {
     const rf = rfInstance.current;
     if (!rf) return;
-    if (runningNodeId) {
-      const node = rf.getNode(runningNodeId);
-      if (node) {
-        const x = node.position.x + NODE_WIDTH / 2;
-        const y = node.position.y + NODE_HEIGHT / 2;
-        rf.setCenter(x, y, { zoom: 1, duration: 700 });
-        return;
-      }
+    if (!userInteractingRef.current) {
+      doFocus(rf);
     }
-    // No running node → show the full graph
-    rf.fitView({ padding: 0.2, duration: 700 });
-  }, [runningNodeId, initialNodes]);
+  }, [initialNodes, doFocus]);
+
+  // Reset interaction flag on unmount / taskId change
+  useEffect(() => {
+    userInteractingRef.current = false;
+    return () => {
+      if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
+    };
+  }, [taskId]);
+
+  const handleUserMoveEnd = useCallback(() => {
+    userInteractingRef.current = true;
+    if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
+    focusTimerRef.current = setTimeout(() => {
+      userInteractingRef.current = false;
+      const rf = rfInstance.current;
+      if (rf) doFocus(rf);
+    }, 3000);
+  }, [doFocus]);
 
   const handleNodeClick = useCallback(
     (_event: React.MouseEvent, node: Node) => {
@@ -299,7 +409,16 @@ export default function DagView({ taskId, onNodeClick, height = "320px" }: DagVi
   }
 
   return (
-    <div style={{ height, width: "100%" }} className="relative">
+    <div style={{ height, width: "100%" }} className="relative dag-graph">
+      <style>{`
+        @keyframes dag-breathe {
+          0%, 100% { transform: scale(1.05); opacity: 1; }
+          50% { transform: scale(1.09); opacity: 0.88; }
+        }
+        .dag-breathing {
+          animation: dag-breathe 1.6s ease-in-out infinite;
+        }
+      `}</style>
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -315,10 +434,12 @@ export default function DagView({ taskId, onNodeClick, height = "320px" }: DagVi
         maxZoom={1.5}
         nodesDraggable={false}
         nodesConnectable={false}
+        onMoveEnd={handleUserMoveEnd}
       >
         <Background color="#e5e7eb" gap={16} />
         <Controls showInteractive={false} />
         <MiniMap
+          style={{ width: 120, height: 72 }}
           nodeColor={(n) => {
             const s = n.data?.status as string;
             if (s === "running") return "#3b82f6";

@@ -18,6 +18,9 @@ const PHASE_COLORS: Record<string, string> = {
   closing: "bg-gray-100 text-gray-600 border-gray-200",
 };
 
+// Stable reference — used in useMemo deps (must not be recreated per render).
+const PHASES = ["opening", "core", "probing", "closing"] as const;
+
 function InterviewQuestionCard({ q, index }: { q: InterviewQuestion; index: number }) {
   return (
     <div className={`rounded-xl border p-5 space-y-3 ${PHASE_COLORS[q.phase] || "bg-white border-gray-200"}`}>
@@ -61,9 +64,11 @@ export default function InterviewView() {
     interviewApi.get(id).then((r) => setInterview(r.data)).catch(() => setError("访谈提纲未找到"));
   }, [id]);
 
+  const questions = interview?.questions ?? [];
+
   const handleCopy = () => {
     if (!interview) return;
-    const text = interview.questions.map((q, i) => {
+    const text = questions.map((q, i) => {
       let line = `${i}. [${PHASE_LABELS[q.phase] || q.phase}] ${q.text}`;
       if (q.follow_ups.length) line += "\n" + q.follow_ups.map((fu) => `   → ${fu}`).join("\n");
       return line;
@@ -73,17 +78,14 @@ export default function InterviewView() {
     toast("访谈提纲已复制到剪贴板", "success");
   };
 
-  if (error) return <div className="p-8 text-red-600">{error}</div>;
-  if (!interview) return <div className="p-8 text-gray-500">加载中...</div>;
-
-  // Group questions by phase
-  const phases = ["opening", "core", "probing", "closing"] as const;
+  // Pre-compute question indices (must be before any early return — hook rules)
   const qIndexByPhase = useMemo(() => {
-    const map = new Map<typeof phases[number], number[]>();
+    const map = new Map<string, number[]>();
+    if (!interview) return map;
     let idx = 0;
-    for (const phase of phases) {
+    for (const phase of PHASES) {
       const nums: number[] = [];
-      for (const q of interview.questions) {
+      for (const q of questions) {
         if (q.phase === phase) {
           idx += 1;
           nums.push(idx);
@@ -92,7 +94,11 @@ export default function InterviewView() {
       map.set(phase, nums);
     }
     return map;
-  }, [interview.questions]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [interview]);
+
+  if (error) return <div className="p-8 text-red-600">{error}</div>;
+  if (!interview) return <div className="p-8 text-gray-500">加载中...</div>;
 
   return (
     <div className="max-w-3xl mx-auto p-6 space-y-6">
@@ -105,7 +111,7 @@ export default function InterviewView() {
         <div className="flex gap-4 mt-4 text-sm text-emerald-200">
           <span className="flex items-center gap-1"><Clock className="w-4 h-4" /> 约{interview.estimated_duration_min || 30}分钟</span>
           <span className="flex items-center gap-1"><Users className="w-4 h-4" /> {interview.target_persona || "目标用户"}</span>
-          <span>{interview.questions.length} 个问题</span>
+          <span>{questions.length} 个问题</span>
         </div>
       </div>
 
@@ -127,8 +133,8 @@ export default function InterviewView() {
       </div>
 
       {/* Questions grouped by phase */}
-      {phases.map((phase) => {
-        const phaseQuestions = interview.questions.filter((q) => q.phase === phase);
+      {PHASES.map((phase) => {
+        const phaseQuestions = questions.filter((q) => q.phase === phase);
         if (phaseQuestions.length === 0) return null;
         return (
           <div key={phase} className="space-y-3">
