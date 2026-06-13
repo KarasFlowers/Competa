@@ -36,6 +36,7 @@ class FieldworkAgent(BaseAgent):
         interview = input_data.get("interview") or {}
         personas = input_data.get("personas") or []
         our_product_notes = input_data.get("our_product_notes", "")
+        output_language = input_data.get("output_language", "zh")
 
         competitor_names = [
             c.get("name", str(c)) if isinstance(c, dict) else c
@@ -54,6 +55,7 @@ class FieldworkAgent(BaseAgent):
         validated, llm_resp, traces = await self.call_and_validate(
             user_prompt=user_prompt,
             output_schema=FieldworkOutput,
+            output_language=output_language,
         )
 
         fieldwork = validated.model_dump()

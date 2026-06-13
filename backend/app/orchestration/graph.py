@@ -67,6 +67,7 @@ async def collect_node(state: PipelineState) -> dict:
         "our_product_notes": task.get("our_product_notes", ""),
         "focus_areas": task.get("focus_areas"),
         "constraints": constraints,
+        "output_language": task.get("output_language", "zh"),
     })
 
     llm_info = result.get("_llm_response", {})
@@ -97,6 +98,7 @@ async def survey_node(state: PipelineState) -> dict:
         "industry": task.get("industry", ""),
         "focus_areas": task.get("focus_areas"),
         "our_product_notes": task.get("our_product_notes", ""),
+        "output_language": task.get("output_language", "zh"),
     })
 
     llm_info = result.get("_llm_response", {})
@@ -130,6 +132,7 @@ async def interview_node(state: PipelineState) -> dict:
         "industry": task.get("industry", ""),
         "survey_questions": survey_questions if survey_questions else None,
         "our_product_notes": task.get("our_product_notes", ""),
+        "output_language": task.get("output_language", "zh"),
     })
 
     llm_info = result.get("_llm_response", {})
@@ -165,6 +168,7 @@ async def fieldwork_node(state: PipelineState) -> dict:
         "interview": state.get("interview", {}),
         "personas": state.get("analysis", {}).get("personas", []),
         "our_product_notes": task.get("our_product_notes", ""),
+        "output_language": task.get("output_language", "zh"),
     })
 
     new_sources = result.get("sources", [])
@@ -233,6 +237,7 @@ async def analyze_node(state: PipelineState) -> dict:
     result = await _analyst.run({
         "sources": sources_for_analysis,
         "constraints": constraints,
+        "output_language": state.get("task", {}).get("output_language", "zh"),
     })
 
     llm_info = result.get("_llm_response", {})
@@ -263,6 +268,7 @@ async def write_node(state: PipelineState) -> dict:
         "task_id": task_id,
         "constraints": constraints,
         "sources": state.get("curated_sources") or state.get("sources", []),
+        "output_language": task.get("output_language", "zh"),
     })
 
     llm_info = result.get("_llm_response", {})
@@ -418,6 +424,7 @@ async def qa_node(state: PipelineState) -> dict:
         "sources": sources,
         "task_id": task_id,
         "retry_count": state.get("retry_count", 0),
+        "output_language": state.get("task", {}).get("output_language", "zh"),
     })
 
     qa_feedback = result["qa_feedback"]

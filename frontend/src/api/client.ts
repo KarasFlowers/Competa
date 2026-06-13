@@ -41,6 +41,7 @@ export interface Task {
   competitors: (string | CompetitorInput)[];
   focus_areas: string[];
   our_product_notes: string;
+  output_language: string;  // "zh" | "en"
   human_review_required: boolean;
   manual_correction_count: number;
   last_qa_feedback: Record<string, unknown>;
@@ -97,6 +98,7 @@ export interface TaskCreatePayload {
   competitors?: (string | CompetitorInput)[];
   focus_areas?: string[];
   our_product_notes?: string;
+  output_language?: "zh" | "en";
   human_review_required?: boolean;
 }
 

@@ -54,6 +54,7 @@ class QAAgent(BaseAgent):
         sources = input_data.get("sources", [])
         task_id = input_data.get("task_id", "")
         retry_count = input_data.get("retry_count", 0)
+        output_language = input_data.get("output_language", "zh")
 
         report_json = json.dumps(report, ensure_ascii=False, indent=2, default=str)
         sources_json = json.dumps(sources, ensure_ascii=False, indent=2, default=str)
@@ -63,6 +64,7 @@ class QAAgent(BaseAgent):
         validated, llm_resp, traces = await self.call_and_validate(
             user_prompt=user_prompt,
             output_schema=QAOutput,
+            output_language=output_language,
         )
 
         issues_dicts = [i.model_dump() for i in validated.issues]

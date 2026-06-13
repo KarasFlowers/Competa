@@ -203,6 +203,7 @@ async def run_pipeline(
                     "industry": task.industry or "",
                     "focus_areas": task.focus_areas or [],
                     "our_product_notes": task.our_product_notes or "",
+                    "output_language": task.output_language or "zh",
                 },
                 "sources": existing_sources,
                 "curated_sources": [],

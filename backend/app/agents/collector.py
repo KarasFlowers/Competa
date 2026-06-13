@@ -150,6 +150,7 @@ class CollectorAgent(BaseAgent):
         industry = input_data.get("industry", "")
         focus_areas = input_data.get("focus_areas")
         our_product_notes = input_data.get("our_product_notes", "")
+        output_language = input_data.get("output_language", "zh")
 
         # Normalize competitors: str → {"name": str}, dict → pass through
         competitors: list[dict[str, Any]] = []
@@ -216,6 +217,8 @@ class CollectorAgent(BaseAgent):
             validated, llm_resp, traces = await self.call_and_validate(
                 user_prompt=user_prompt,
                 output_schema=CollectResult,
+                max_tokens=8192,
+                output_language=output_language,
             )
         except RuntimeError as exc:
             provider_blocked = isinstance(exc.__cause__, LLMContentFilterError)
@@ -240,6 +243,8 @@ class CollectorAgent(BaseAgent):
             validated, llm_resp, traces = await self.call_and_validate(
                 user_prompt=fallback_prompt,
                 output_schema=CollectResult,
+                max_tokens=8192,
+                output_language=output_language,
             )
 
         # Convert sources to dicts with IDs for downstream use

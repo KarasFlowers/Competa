@@ -81,6 +81,7 @@ async def test_migrate_add_columns_repairs_legacy_sqlite_schema(tmp_path):
     assert "last_qa_feedback" in task_columns
     assert "last_handoff" in task_columns
     assert "last_curation_summary" in task_columns
+    assert "output_language" in task_columns
     assert "reliability_score" in source_columns
     assert "included_in_analysis" in source_columns
     assert "curation_reason" in source_columns

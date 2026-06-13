@@ -142,6 +142,7 @@ class TaskCreate(BaseModel):
     competitors: list[str | CompetitorInput] = Field(default_factory=list)
     focus_areas: list[str] = Field(default_factory=list)
     our_product_notes: str = ""  # context about our own product
+    output_language: str = "zh"  # zh | en — language for agent-generated content
     human_review_required: bool = False
 
 
@@ -153,6 +154,7 @@ class TaskResponse(BaseModel):
     competitors: list[str | CompetitorInput]
     focus_areas: list[str] = Field(default_factory=list)
     our_product_notes: str = ""
+    output_language: str = "zh"
     human_review_required: bool = False
     manual_correction_count: int = 0
     last_qa_feedback: dict = Field(default_factory=dict)
@@ -190,6 +192,7 @@ class TaskOverviewItem(BaseModel):
     competitors: list[str | CompetitorInput]
     focus_areas: list[str] = Field(default_factory=list)
     our_product_notes: str = ""
+    output_language: str = "zh"
     human_review_required: bool = False
     status: str
     created_at: datetime
@@ -252,6 +255,10 @@ async def create_task(body: TaskCreate, session: AsyncSession = Depends(get_sess
             competitors_data.append({"name": c, "category": "direct"})
         else:
             competitors_data.append(c.model_dump())
+    # Validate output language; fall back to Chinese for unknown values.
+    output_language = body.output_language.lower() if body.output_language else "zh"
+    if output_language not in ("zh", "en"):
+        output_language = "zh"
     task = TaskModel(
         industry=body.industry,
         target_product=body.target_product,
@@ -259,6 +266,7 @@ async def create_task(body: TaskCreate, session: AsyncSession = Depends(get_sess
         competitors=competitors_data,
         focus_areas=_normalize_focus_areas(body.focus_areas),
         our_product_notes=body.our_product_notes,
+        output_language=output_language,
         human_review_required=body.human_review_required,
     )
     session.add(task)
@@ -319,6 +327,7 @@ async def get_tasks_overview(session: AsyncSession = Depends(get_session)):
                 competitors=task.competitors or [],
                 focus_areas=task.focus_areas or [],
                 our_product_notes=task.our_product_notes or "",
+                output_language=task.output_language or "zh",
                 human_review_required=bool(task.human_review_required),
                 status=task.status,
                 created_at=task.created_at,

@@ -22,6 +22,7 @@ class AnalystAgent(BaseAgent):
             - constraints: list[str] (optional, ratchet constraints from QA)
         """
         sources = input_data.get("sources", [])
+        output_language = input_data.get("output_language", "zh")
         # Pass structured summary, not full content
         sources_summary = json.dumps(sources, ensure_ascii=False, indent=2, default=str)
 
@@ -35,6 +36,8 @@ class AnalystAgent(BaseAgent):
         validated, llm_resp, traces = await self.call_and_validate(
             user_prompt=user_prompt,
             output_schema=AnalyzeResult,
+            max_tokens=8192,
+            output_language=output_language,
         )
 
         return {
