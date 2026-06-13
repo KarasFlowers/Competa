@@ -12,6 +12,10 @@ export function externalHref(url: string | null | undefined) {
   return `https://${trimmed.replace(/^\/+/, "")}`;
 }
 
+export function formatWebsiteLabel(url: string) {
+  return url.replace(/^https?:\/\//i, "").replace(/\/$/, "");
+}
+
 export interface CompetitorInput {
   name: string;
   category: string;  // direct | indirect | substitute

@@ -543,6 +543,77 @@ AI_ASSISTANT["analysis"] = {
     "personas": [],
     "swot_analyses": [],
 }
+SHORT_VIDEO["analysis"] = {
+    "feature_trees": [
+        {"product_name": "抖音", "root_nodes": [
+            {"name": "用户规模", "description": "DAU 8 亿+", "status": "supported", "children": []},
+            {"name": "电商能力", "description": "GMV 3 万亿+", "status": "supported", "children": []},
+            {"name": "AI 推荐", "description": "推荐+AI特效+AI搜索", "status": "supported", "children": []},
+            {"name": "本地生活", "description": "侵蚀美团份额", "status": "partial", "children": []},
+            {"name": "内容生态", "description": "全品类覆盖", "status": "supported", "children": []},
+        ]},
+        {"product_name": "快手", "root_nodes": [
+            {"name": "用户规模", "description": "DAU 4 亿+", "status": "supported", "children": []},
+            {"name": "电商能力", "description": "GMV 1.2 万亿+", "status": "supported", "children": []},
+            {"name": "AI 技术", "description": "AI直播+数字人+短剧", "status": "partial", "children": []},
+            {"name": "社区信任", "description": "下沉市场/中老年", "status": "supported", "children": []},
+            {"name": "内容生态", "description": "直播+短剧+电商", "status": "supported", "children": []},
+        ]},
+        {"product_name": "小红书", "root_nodes": [
+            {"name": "用户规模", "description": "MAU 3 亿+", "status": "supported", "children": []},
+            {"name": "电商能力", "description": "千亿级 GMV", "status": "partial", "children": []},
+            {"name": "搜索心智", "description": "生活方式搜索", "status": "supported", "children": []},
+            {"name": "用户画像", "description": "一二线/年轻女性★", "status": "supported", "children": []},
+            {"name": "内容生态", "description": "种草+笔记+直播", "status": "supported", "children": []},
+        ]},
+        {"product_name": "B站", "root_nodes": [
+            {"name": "用户规模", "description": "MAU 3.4 亿+", "status": "supported", "children": []},
+            {"name": "电商能力", "description": "百亿级 GMV", "status": "partial", "children": []},
+            {"name": "AI 技术", "description": "AI字幕+内容总结", "status": "partial", "children": []},
+            {"name": "用户画像", "description": "Z世代/学生群体★", "status": "supported", "children": []},
+            {"name": "内容生态", "description": "中长视频+弹幕文化", "status": "supported", "children": []},
+        ]},
+    ],
+    "pricing_models": [],
+    "personas": [],
+    "swot_analyses": [],
+}
+
+AI_CODING["analysis"] = {
+    "feature_trees": [
+        {"product_name": "Cursor", "root_nodes": [
+            {"name": "Agent 模式", "description": "最成熟 ★", "status": "supported", "children": []},
+            {"name": "多文件编辑", "description": "原生支持 ★", "status": "supported", "children": []},
+            {"name": "定价", "description": "$20/月", "status": "partial", "children": []},
+            {"name": "生态集成", "description": "VS Code 插件", "status": "partial", "children": []},
+            {"name": "中文优化", "description": "一般", "status": "missing", "children": []},
+        ]},
+        {"product_name": "GitHub Copilot", "root_nodes": [
+            {"name": "Agent 模式", "description": "2025 新增", "status": "partial", "children": []},
+            {"name": "多文件编辑", "description": "Workspace", "status": "partial", "children": []},
+            {"name": "定价", "description": "$10/月", "status": "supported", "children": []},
+            {"name": "生态集成", "description": "GitHub 深度集成 ★", "status": "supported", "children": []},
+            {"name": "中文优化", "description": "一般", "status": "missing", "children": []},
+        ]},
+        {"product_name": "TRAE", "root_nodes": [
+            {"name": "Agent 模式", "description": "Builder 模式", "status": "partial", "children": []},
+            {"name": "多文件编辑", "description": "支持", "status": "supported", "children": []},
+            {"name": "定价", "description": "**免费** ★", "status": "supported", "children": []},
+            {"name": "生态集成", "description": "豆包模型", "status": "partial", "children": []},
+            {"name": "中文优化", "description": "**深度优化** ★", "status": "supported", "children": []},
+        ]},
+        {"product_name": "Windsurf", "root_nodes": [
+            {"name": "Agent 模式", "description": "Cascade", "status": "partial", "children": []},
+            {"name": "多文件编辑", "description": "Cascade 支持", "status": "partial", "children": []},
+            {"name": "定价", "description": "$15/月", "status": "partial", "children": []},
+            {"name": "生态集成", "description": "多 LLM 后端", "status": "supported", "children": []},
+            {"name": "中文优化", "description": "一般", "status": "missing", "children": []},
+        ]},
+    ],
+    "pricing_models": [],
+    "personas": [],
+    "swot_analyses": [],
+}
 DEMO_SCENARIOS: list[dict[str, Any]] = [AI_ASSISTANT, SHORT_VIDEO, AI_CODING]
 
 

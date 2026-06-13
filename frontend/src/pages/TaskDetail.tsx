@@ -5,6 +5,7 @@ import {
   metricsApi,
   analysisApi,
   externalHref,
+  formatWebsiteLabel,
   type AnalysisData,
   type CurationSummary,
   type ConstraintSummary,
@@ -18,6 +19,7 @@ import { useToast } from "../components/Toast";
 import {
   Activity,
   AlertTriangle,
+  ArrowLeft,
   ClipboardList,
   ExternalLink,
   Layers3,
@@ -110,9 +112,6 @@ function getStatusLabel(status: string) {
   return STATUS_LABELS[status] ?? status;
 }
 
-function formatWebsiteLabel(url: string) {
-  return url.replace(/^https?:\/\//i, "").replace(/\/$/, "");
-}
 
 function SectionLoading({ label }: { label: string }) {
   return (
@@ -140,6 +139,8 @@ export default function TaskDetail() {
   const [continuingReview, setContinuingReview] = useState(false);
   
   const eventSourceRef = useRef<EventSource | null>(null);
+  const sseErrorCountRef = useRef(0);
+  const pollFailCountRef = useRef(0);
 
   const loadTaskSnapshot = async (taskId: string, mode: "full" | "status" = "full") => {
     const taskPromise = taskApi.get(taskId).then((r) => {
@@ -199,11 +200,16 @@ export default function TaskDetail() {
       });
 
       source.onerror = () => {
-        source.close();
+        sseErrorCountRef.current += 1;
+        if (sseErrorCountRef.current >= 6) {
+          source.close();
+          pollFailCountRef.current = 0;
+        }
       };
     };
 
     setupSSE();
+    sseErrorCountRef.current = 0;
 
     return () => {
       if (eventSourceRef.current) {
@@ -215,9 +221,11 @@ export default function TaskDetail() {
   // Fallback Polling (in case SSE fails/drops)
   useEffect(() => {
     if (!id || !polling) return;
+    pollFailCountRef.current = 0;
     const interval = setInterval(async () => {
       try {
         const r = await taskApi.getStatus(id);
+        pollFailCountRef.current = 0;
         setTask((prev) => (prev ? { ...prev, status: r.data.status } : prev));
         if (["completed", "failed"].includes(r.data.status)) {
           setPolling(false);
@@ -225,9 +233,21 @@ export default function TaskDetail() {
           if (eventSourceRef.current) {
             eventSourceRef.current.close();
           }
-          loadTaskSnapshot(id).catch(() => {});
+          loadTaskSnapshot(id).catch(() => {
+            console.warn("Failed to refresh task snapshot after completion for", id);
+          });
         }
-      } catch {}
+      } catch {
+        pollFailCountRef.current += 1;
+        if (pollFailCountRef.current >= 15) {
+          setPolling(false);
+          setTask((prev) => (prev ? { ...prev, status: "failed" } : prev));
+          if (eventSourceRef.current) {
+            eventSourceRef.current.close();
+          }
+          toast("后端持续无响应，已停止轮询。请检查网络后重试。", "error");
+        }
+      }
     }, 2000);
     return () => clearInterval(interval);
   }, [id, polling]);
@@ -310,7 +330,9 @@ export default function TaskDetail() {
       });
       setShowSourceModal(false);
       setNewSource({ title: "", url: "", content_snippet: "", type: "url" });
-      loadTaskSnapshot(id).catch(() => {});
+      loadTaskSnapshot(id).catch(() => {
+        console.warn("Failed to refresh after adding source for", id);
+      });
       // Suggest rerun
       toast("资料已补充！请点击「保留资料重生成」以纳入新资料并修正报告。", "success");
     } catch (err) {
@@ -335,6 +357,10 @@ export default function TaskDetail() {
 
   return (
     <div className="max-w-4xl mx-auto p-6 space-y-8">
+      <Link to="/tasks" className="text-sm text-gray-400 hover:text-gray-600 inline-flex items-center gap-1">
+        <ArrowLeft className="w-3.5 h-3.5" /> 返回工作台
+      </Link>
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -794,7 +820,7 @@ export default function TaskDetail() {
       {/* Add Source Modal */}
       {showSourceModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md mx-4">
+          <div role="dialog" aria-modal="true" aria-label="补充资料" className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md mx-4">
             <h2 className="text-xl font-bold mb-4">补充资料</h2>
             <form onSubmit={handleAddSource} className="space-y-4">
               <div>

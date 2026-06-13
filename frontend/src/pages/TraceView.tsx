@@ -98,7 +98,7 @@ export default function TraceView() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
-          <Link to={`/tasks/${id}`} className="p-2 text-gray-400 hover:text-gray-900 bg-white rounded-lg border shadow-sm">
+          <Link to={`/tasks/${id}`} aria-label="返回任务详情" className="p-2 text-gray-400 hover:text-gray-900 bg-white rounded-lg border shadow-sm">
             <ArrowLeft className="w-5 h-5" />
           </Link>
           <div>
